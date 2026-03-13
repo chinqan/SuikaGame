@@ -50,6 +50,9 @@ let gameOverTimer = null;
 let playerId = 'guest';
 let gameStartTime = 0;
 
+// 音效類型
+let currentSoundType = localStorage.getItem('neonMergeSoundType') || 'standard';
+
 // Particles
 let particles = [];
 
@@ -103,6 +106,10 @@ function init() {
   // 排行榜按鈕
   document.getElementById('leaderboard-btn').addEventListener('click', openLeaderboard);
   document.getElementById('leaderboard-close-btn').addEventListener('click', closeLeaderboard);
+
+  // 設定按鈕
+  document.getElementById('settings-btn').addEventListener('click', openSettings);
+  document.getElementById('settings-close-btn').addEventListener('click', closeSettings);
 
   // 讀取上次的 ID
   const savedId = localStorage.getItem('neonMergePlayerId');
@@ -1083,13 +1090,25 @@ function playDropSound() {
   osc.stop(t + 0.12);
 }
 
-// 震撼爆破音效
+// ─── 音效調度 ─────────────────────────────────
 function playMergeSound(level) {
+  const handlers = {
+    standard:  playMergeSoundStandard,
+    crystal:   playMergeSoundCrystal,
+    waterdrop: playMergeSoundWaterDrop,
+    bomb:      playMergeSoundBomb,
+    stone:     playMergeSoundStone,
+    cosmic:    playMergeSoundCosmic,
+  };
+  (handlers[currentSoundType] || playMergeSoundStandard)(level);
+}
+
+// 標準音效 — 爆破衝擊感
+function playMergeSoundStandard(level) {
   ensureAudioCtx();
   const t = audioCtx.currentTime;
   const intensity = 0.7 + level * 0.1;
 
-  // === 壓縮器 — 讓爆破音更飽滿 ===
   const comp = audioCtx.createDynamicsCompressor();
   comp.threshold.setValueAtTime(-20, t);
   comp.knee.setValueAtTime(10, t);
@@ -1098,7 +1117,7 @@ function playMergeSound(level) {
   comp.release.setValueAtTime(0.1, t);
   comp.connect(audioCtx.destination);
 
-  // === 1. 爆破白噪 (主體衝擊) ===
+  // 1. 爆破白噪 (主體衝擊)
   const noiseDur = 0.3 + level * 0.03;
   const bufSz = Math.floor(audioCtx.sampleRate * noiseDur);
   const nBuf = audioCtx.createBuffer(1, bufSz, audioCtx.sampleRate);
@@ -1119,7 +1138,7 @@ function playMergeSound(level) {
   nSrc.start(t);
   nSrc.stop(t + noiseDur);
 
-  // === 2. 低頻重擊 (衝擊波) ===
+  // 2. 低頻重擊 (衝擊波)
   const subO = audioCtx.createOscillator();
   const subG = audioCtx.createGain();
   subO.type = 'sine';
@@ -1131,7 +1150,7 @@ function playMergeSound(level) {
   subO.start(t);
   subO.stop(t + 0.35);
 
-  // === 3. 金屬撞擊 (碎裂) ===
+  // 3. 金屬撞擊 (碎裂)
   const mFreq = 800 + level * 150;
   const mO = audioCtx.createOscillator();
   const mG = audioCtx.createGain();
@@ -1147,7 +1166,7 @@ function playMergeSound(level) {
   mO.start(t);
   mO.stop(t + 0.1);
 
-  // === 4. 升調回饋 (成功感) ===
+  // 4. 升調回饋 (成功感)
   const rFreq = 300 + level * 80;
   const rO = audioCtx.createOscillator();
   const rG = audioCtx.createGain();
@@ -1160,6 +1179,434 @@ function playMergeSound(level) {
   rO.connect(rG).connect(comp);
   rO.start(t);
   rO.stop(t + 0.45);
+}
+
+// 水晶音效 — 堅硬物體碰撞 / 陶瓷質感 + ASMR
+function playMergeSoundCrystal(level) {
+  ensureAudioCtx();
+  const t = audioCtx.currentTime;
+  const intensity = 0.6 + level * 0.08;
+
+  const comp = audioCtx.createDynamicsCompressor();
+  comp.threshold.setValueAtTime(-12, t);
+  comp.knee.setValueAtTime(4, t);
+  comp.ratio.setValueAtTime(6, t);
+  comp.attack.setValueAtTime(0.001, t);
+  comp.release.setValueAtTime(0.15, t);
+  comp.connect(audioCtx.destination);
+
+  // 1. 瞬態衝擊 (極短高頻噪聲 click)
+  const clickDur = 0.012;
+  const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
+  const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
+  const clickData = clickBuf.getChannelData(0);
+  for (let i = 0; i < clickSz; i++) {
+    clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 8);
+  }
+  const clickSrc = audioCtx.createBufferSource();
+  clickSrc.buffer = clickBuf;
+  const clickGain = audioCtx.createGain();
+  clickGain.gain.setValueAtTime(0.7 * intensity, t);
+  clickGain.gain.exponentialRampToValueAtTime(0.001, t + clickDur);
+  const clickHPF = audioCtx.createBiquadFilter();
+  clickHPF.type = 'highpass';
+  clickHPF.frequency.setValueAtTime(2000, t);
+  clickHPF.Q.setValueAtTime(1.5, t);
+  clickSrc.connect(clickHPF).connect(clickGain).connect(comp);
+  clickSrc.start(t);
+  clickSrc.stop(t + clickDur);
+
+  // 2. 水晶撞擊音 (高頻正弦 ping)
+  const pingFreq = 3200 - level * 180;
+  const pingDur = 0.15 + level * 0.025;
+  const pingO = audioCtx.createOscillator();
+  const pingG = audioCtx.createGain();
+  pingO.type = 'sine';
+  pingO.frequency.setValueAtTime(pingFreq, t);
+  pingO.frequency.exponentialRampToValueAtTime(pingFreq * 0.7, t + pingDur);
+  pingG.gain.setValueAtTime(0.35 * intensity, t);
+  pingG.gain.setValueAtTime(0.35 * intensity, t + 0.003);
+  pingG.gain.exponentialRampToValueAtTime(0.001, t + pingDur);
+  const pingBPF = audioCtx.createBiquadFilter();
+  pingBPF.type = 'bandpass';
+  pingBPF.frequency.setValueAtTime(pingFreq, t);
+  pingBPF.Q.setValueAtTime(3, t);
+  pingO.connect(pingBPF).connect(pingG).connect(comp);
+  pingO.start(t);
+  pingO.stop(t + pingDur);
+
+  // 3. 金屬共鳴泛音 (雙頻三角波)
+  const resDur = 0.25 + level * 0.04;
+  const resBase = 1800 - level * 100;
+  const detune = 12 + level * 3;
+  for (let d = 0; d < 2; d++) {
+    const resO = audioCtx.createOscillator();
+    const resG = audioCtx.createGain();
+    resO.type = 'triangle';
+    resO.frequency.setValueAtTime(resBase + (d === 0 ? detune : -detune), t);
+    resG.gain.setValueAtTime(0.12 * intensity, t + 0.002);
+    resG.gain.exponentialRampToValueAtTime(0.001, t + resDur);
+    resO.connect(resG).connect(comp);
+    resO.start(t);
+    resO.stop(t + resDur);
+  }
+
+  // 4. 高頻泛音 shimmer (ASMR 尾韻)
+  const shimFreq = 5000 + level * 300;
+  const shimDur = 0.4 + level * 0.05;
+  const shimO = audioCtx.createOscillator();
+  const shimG = audioCtx.createGain();
+  shimO.type = 'sine';
+  shimO.frequency.setValueAtTime(shimFreq, t + 0.01);
+  shimO.frequency.exponentialRampToValueAtTime(shimFreq * 0.5, t + shimDur);
+  shimG.gain.setValueAtTime(0.001, t);
+  shimG.gain.linearRampToValueAtTime(0.06 * intensity, t + 0.02);
+  shimG.gain.exponentialRampToValueAtTime(0.001, t + shimDur);
+  shimO.connect(shimG).connect(comp);
+  shimO.start(t);
+  shimO.stop(t + shimDur);
+
+  // 5. 短促低頻撞擊體感 (輕微)
+  const thudO = audioCtx.createOscillator();
+  const thudG = audioCtx.createGain();
+  thudO.type = 'sine';
+  thudO.frequency.setValueAtTime(180 + level * 15, t);
+  thudO.frequency.exponentialRampToValueAtTime(60, t + 0.06);
+  thudG.gain.setValueAtTime(0.15 * intensity, t);
+  thudG.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+  thudO.connect(thudG).connect(comp);
+  thudO.start(t);
+  thudO.stop(t + 0.08);
+}
+
+// 💧 水滴聲 — ASMR 水滴碰撞：清脆滴落 + 漣漪泛音 + 柔和水花
+function playMergeSoundWaterDrop(level) {
+  ensureAudioCtx();
+  const t = audioCtx.currentTime;
+  const intensity = 0.5 + level * 0.06;
+
+  // 1. 水滴「叮」—— 極短正弦 ping，快速頻率下滑模擬滴落
+  const dropFreq = 1800 - level * 120;
+  const dropDur = 0.08 + level * 0.01;
+  const dropO = audioCtx.createOscillator();
+  const dropG = audioCtx.createGain();
+  dropO.type = 'sine';
+  dropO.frequency.setValueAtTime(dropFreq, t);
+  dropO.frequency.exponentialRampToValueAtTime(dropFreq * 0.25, t + dropDur);
+  dropG.gain.setValueAtTime(0.5 * intensity, t);
+  dropG.gain.exponentialRampToValueAtTime(0.001, t + dropDur);
+  dropO.connect(dropG).connect(audioCtx.destination);
+  dropO.start(t);
+  dropO.stop(t + dropDur);
+
+  // 2. 漣漪泛音 —— 兩層柔和正弦波，微走調產生空間感
+  const rippleDur = 0.35 + level * 0.04;
+  for (let i = 0; i < 2; i++) {
+    const ripO = audioCtx.createOscillator();
+    const ripG = audioCtx.createGain();
+    ripO.type = 'sine';
+    const rFreq = (600 - level * 30) + (i === 0 ? 8 : -8);
+    ripO.frequency.setValueAtTime(rFreq, t + 0.02);
+    ripO.frequency.exponentialRampToValueAtTime(rFreq * 0.4, t + rippleDur);
+    ripG.gain.setValueAtTime(0.001, t);
+    ripG.gain.linearRampToValueAtTime(0.12 * intensity, t + 0.03);
+    ripG.gain.exponentialRampToValueAtTime(0.001, t + rippleDur);
+    ripO.connect(ripG).connect(audioCtx.destination);
+    ripO.start(t + 0.02);
+    ripO.stop(t + rippleDur);
+  }
+
+  // 3. 柔和水花噪聲 —— 極輕帶通噪聲，短暫的「沙」感
+  const splashDur = 0.1 + level * 0.015;
+  const splSz = Math.floor(audioCtx.sampleRate * splashDur);
+  const splBuf = audioCtx.createBuffer(1, splSz, audioCtx.sampleRate);
+  const splData = splBuf.getChannelData(0);
+  for (let i = 0; i < splSz; i++) {
+    splData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / splSz, 4);
+  }
+  const splSrc = audioCtx.createBufferSource();
+  splSrc.buffer = splBuf;
+  const splG = audioCtx.createGain();
+  splG.gain.setValueAtTime(0.08 * intensity, t + 0.01);
+  splG.gain.exponentialRampToValueAtTime(0.001, t + splashDur);
+  const splBPF = audioCtx.createBiquadFilter();
+  splBPF.type = 'bandpass';
+  splBPF.frequency.setValueAtTime(3000, t);
+  splBPF.Q.setValueAtTime(2, t);
+  splSrc.connect(splBPF).connect(splG).connect(audioCtx.destination);
+  splSrc.start(t + 0.01);
+  splSrc.stop(t + splashDur + 0.01);
+
+  // 4. ASMR 尾韻 shimmer —— 極輕高頻緩慢消散
+  const shimO = audioCtx.createOscillator();
+  const shimG = audioCtx.createGain();
+  shimO.type = 'sine';
+  shimO.frequency.setValueAtTime(4000 + level * 200, t + 0.05);
+  shimO.frequency.exponentialRampToValueAtTime(2000, t + 0.5);
+  shimG.gain.setValueAtTime(0.001, t);
+  shimG.gain.linearRampToValueAtTime(0.04 * intensity, t + 0.08);
+  shimG.gain.exponentialRampToValueAtTime(0.001, t + 0.5 + level * 0.03);
+  shimO.connect(shimG).connect(audioCtx.destination);
+  shimO.start(t + 0.05);
+  shimO.stop(t + 0.5 + level * 0.03);
+}
+
+// 💥 炸彈聲 — ASMR 深沉爆破：滿足感低頻衝擊 + 溫暖碎裂餘韻
+function playMergeSoundBomb(level) {
+  ensureAudioCtx();
+  const t = audioCtx.currentTime;
+  const intensity = 0.55 + level * 0.07;
+
+  const comp = audioCtx.createDynamicsCompressor();
+  comp.threshold.setValueAtTime(-15, t);
+  comp.knee.setValueAtTime(6, t);
+  comp.ratio.setValueAtTime(8, t);
+  comp.attack.setValueAtTime(0.001, t);
+  comp.release.setValueAtTime(0.2, t);
+  comp.connect(audioCtx.destination);
+
+  // 1. 深沉 sub-bass 衝擊 —— 極低頻正弦，給人胸腔共鳴的滿足感
+  const subDur = 0.25 + level * 0.03;
+  const subO = audioCtx.createOscillator();
+  const subG = audioCtx.createGain();
+  subO.type = 'sine';
+  subO.frequency.setValueAtTime(60 + level * 5, t);
+  subO.frequency.exponentialRampToValueAtTime(25, t + subDur);
+  subG.gain.setValueAtTime(0.5 * intensity, t);
+  subG.gain.exponentialRampToValueAtTime(0.001, t + subDur);
+  subO.connect(subG).connect(comp);
+  subO.start(t);
+  subO.stop(t + subDur);
+
+  // 2. 瞬態衝擊 click —— 極短噪聲脈衝，爆炸的「碰」
+  const clickDur = 0.02;
+  const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
+  const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
+  const clickData = clickBuf.getChannelData(0);
+  for (let i = 0; i < clickSz; i++) {
+    clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 6);
+  }
+  const clickSrc = audioCtx.createBufferSource();
+  clickSrc.buffer = clickBuf;
+  const clickG = audioCtx.createGain();
+  clickG.gain.setValueAtTime(0.4 * intensity, t);
+  clickG.gain.exponentialRampToValueAtTime(0.001, t + clickDur);
+  clickSrc.connect(clickG).connect(comp);
+  clickSrc.start(t);
+  clickSrc.stop(t + clickDur);
+
+  // 3. 溫暖碎裂餘韻 —— 濾波噪聲緩慢消散，像遠處爆炸的回音
+  const crklDur = 0.4 + level * 0.05;
+  const crklSz = Math.floor(audioCtx.sampleRate * crklDur);
+  const crklBuf = audioCtx.createBuffer(1, crklSz, audioCtx.sampleRate);
+  const crklData = crklBuf.getChannelData(0);
+  for (let i = 0; i < crklSz; i++) {
+    crklData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / crklSz, 3);
+  }
+  const crklSrc = audioCtx.createBufferSource();
+  crklSrc.buffer = crklBuf;
+  const crklG = audioCtx.createGain();
+  crklG.gain.setValueAtTime(0.001, t);
+  crklG.gain.linearRampToValueAtTime(0.15 * intensity, t + 0.03);
+  crklG.gain.exponentialRampToValueAtTime(0.001, t + crklDur);
+  const crklLPF = audioCtx.createBiquadFilter();
+  crklLPF.type = 'lowpass';
+  crklLPF.frequency.setValueAtTime(2000 + level * 200, t);
+  crklLPF.frequency.exponentialRampToValueAtTime(400, t + crklDur);
+  crklSrc.connect(crklLPF).connect(crklG).connect(comp);
+  crklSrc.start(t);
+  crklSrc.stop(t + crklDur);
+
+  // 4. 低沉共鳴尾韻 —— ASMR 的溫暖低頻共振
+  const resDur = 0.5 + level * 0.04;
+  const resO = audioCtx.createOscillator();
+  const resG = audioCtx.createGain();
+  resO.type = 'triangle';
+  resO.frequency.setValueAtTime(120 + level * 10, t + 0.03);
+  resO.frequency.exponentialRampToValueAtTime(40, t + resDur);
+  resG.gain.setValueAtTime(0.001, t);
+  resG.gain.linearRampToValueAtTime(0.1 * intensity, t + 0.06);
+  resG.gain.exponentialRampToValueAtTime(0.001, t + resDur);
+  resO.connect(resG).connect(comp);
+  resO.start(t + 0.03);
+  resO.stop(t + resDur);
+}
+
+// 🪨 堅硬石頭聲 — ASMR 岩石碰撞：銳利衝擊 + 密實中頻共鳴 + 碎礫質感
+function playMergeSoundStone(level) {
+  ensureAudioCtx();
+  const t = audioCtx.currentTime;
+  const intensity = 0.6 + level * 0.07;
+
+  // 1. 石頭衝擊 click —— 極短、極脆的瞬態，高通濾波
+  const clickDur = 0.008;
+  const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
+  const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
+  const clickData = clickBuf.getChannelData(0);
+  for (let i = 0; i < clickSz; i++) {
+    clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 12);
+  }
+  const clickSrc = audioCtx.createBufferSource();
+  clickSrc.buffer = clickBuf;
+  const clickG = audioCtx.createGain();
+  clickG.gain.setValueAtTime(0.8 * intensity, t);
+  clickG.gain.exponentialRampToValueAtTime(0.001, t + clickDur);
+  const clickHPF = audioCtx.createBiquadFilter();
+  clickHPF.type = 'highpass';
+  clickHPF.frequency.setValueAtTime(3000, t);
+  clickHPF.Q.setValueAtTime(2, t);
+  clickSrc.connect(clickHPF).connect(clickG).connect(audioCtx.destination);
+  clickSrc.start(t);
+  clickSrc.stop(t + clickDur);
+
+  // 2. 密實中頻共鳴 —— 石頭碰撞特有的「叩叩」聲
+  const knockDur = 0.12 + level * 0.02;
+  const knockFreq = 800 - level * 40;
+  const knockO = audioCtx.createOscillator();
+  const knockG = audioCtx.createGain();
+  knockO.type = 'triangle';
+  knockO.frequency.setValueAtTime(knockFreq, t);
+  knockO.frequency.exponentialRampToValueAtTime(knockFreq * 0.5, t + knockDur);
+  knockG.gain.setValueAtTime(0.35 * intensity, t);
+  knockG.gain.exponentialRampToValueAtTime(0.001, t + knockDur);
+  const knockBPF = audioCtx.createBiquadFilter();
+  knockBPF.type = 'bandpass';
+  knockBPF.frequency.setValueAtTime(knockFreq, t);
+  knockBPF.Q.setValueAtTime(5, t);
+  knockO.connect(knockBPF).connect(knockG).connect(audioCtx.destination);
+  knockO.start(t);
+  knockO.stop(t + knockDur);
+
+  // 3. 碎礫質感噪聲 —— 帶通噪聲模擬石頭表面摩擦的 ASMR 顆粒感
+  const gritDur = 0.15 + level * 0.02;
+  const gritSz = Math.floor(audioCtx.sampleRate * gritDur);
+  const gritBuf = audioCtx.createBuffer(1, gritSz, audioCtx.sampleRate);
+  const gritData = gritBuf.getChannelData(0);
+  for (let i = 0; i < gritSz; i++) {
+    gritData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / gritSz, 5);
+  }
+  const gritSrc = audioCtx.createBufferSource();
+  gritSrc.buffer = gritBuf;
+  const gritG = audioCtx.createGain();
+  gritG.gain.setValueAtTime(0.18 * intensity, t + 0.005);
+  gritG.gain.exponentialRampToValueAtTime(0.001, t + gritDur);
+  const gritBPF = audioCtx.createBiquadFilter();
+  gritBPF.type = 'bandpass';
+  gritBPF.frequency.setValueAtTime(1500 + level * 100, t);
+  gritBPF.Q.setValueAtTime(3, t);
+  gritSrc.connect(gritBPF).connect(gritG).connect(audioCtx.destination);
+  gritSrc.start(t + 0.005);
+  gritSrc.stop(t + gritDur);
+
+  // 4. 短促重量低頻 —— 石頭碰撞的質量感
+  const thudO = audioCtx.createOscillator();
+  const thudG = audioCtx.createGain();
+  thudO.type = 'sine';
+  thudO.frequency.setValueAtTime(200 + level * 10, t);
+  thudO.frequency.exponentialRampToValueAtTime(70, t + 0.05);
+  thudG.gain.setValueAtTime(0.25 * intensity, t);
+  thudG.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+  thudO.connect(thudG).connect(audioCtx.destination);
+  thudO.start(t);
+  thudO.stop(t + 0.07);
+
+  // 5. 極輕尾韻 —— 石頭碰後的微弱共鳴
+  const tailDur = 0.2 + level * 0.03;
+  const tailO = audioCtx.createOscillator();
+  const tailG = audioCtx.createGain();
+  tailO.type = 'sine';
+  tailO.frequency.setValueAtTime(1200 + level * 50, t + 0.02);
+  tailO.frequency.exponentialRampToValueAtTime(600, t + tailDur);
+  tailG.gain.setValueAtTime(0.001, t);
+  tailG.gain.linearRampToValueAtTime(0.04 * intensity, t + 0.04);
+  tailG.gain.exponentialRampToValueAtTime(0.001, t + tailDur);
+  tailO.connect(tailG).connect(audioCtx.destination);
+  tailO.start(t + 0.02);
+  tailO.stop(t + tailDur);
+}
+
+// 🌌 宇宙電波聲 — ASMR 太空電波：空靈掃頻 + 星塵 shimmer + 深空餘韻
+function playMergeSoundCosmic(level) {
+  ensureAudioCtx();
+  const t = audioCtx.currentTime;
+  const intensity = 0.5 + level * 0.06;
+
+  // 1. FM 合成掃頻 —— 太空電波的「嗶呦」聲
+  const fmDur = 0.2 + level * 0.03;
+  const carrier = audioCtx.createOscillator();
+  const modulator = audioCtx.createOscillator();
+  const modGain = audioCtx.createGain();
+  const carGain = audioCtx.createGain();
+  modulator.type = 'sine';
+  modulator.frequency.setValueAtTime(200 + level * 30, t);
+  modulator.frequency.exponentialRampToValueAtTime(50, t + fmDur);
+  modGain.gain.setValueAtTime(800 + level * 100, t);
+  modGain.gain.exponentialRampToValueAtTime(50, t + fmDur);
+  carrier.type = 'sine';
+  carrier.frequency.setValueAtTime(1500 - level * 60, t);
+  carrier.frequency.exponentialRampToValueAtTime(400, t + fmDur);
+  carGain.gain.setValueAtTime(0.25 * intensity, t);
+  carGain.gain.exponentialRampToValueAtTime(0.001, t + fmDur);
+  modulator.connect(modGain);
+  modGain.connect(carrier.frequency);
+  carrier.connect(carGain).connect(audioCtx.destination);
+  modulator.start(t);
+  carrier.start(t);
+  modulator.stop(t + fmDur);
+  carrier.stop(t + fmDur);
+
+  // 2. 星塵 shimmer —— 多層極輕高頻正弦，產生銀河般的閃爍
+  const shimCount = 3;
+  const shimBase = 3000 + level * 200;
+  for (let i = 0; i < shimCount; i++) {
+    const shimDur = 0.5 + level * 0.05 + i * 0.15;
+    const shimO = audioCtx.createOscillator();
+    const shimG = audioCtx.createGain();
+    shimO.type = 'sine';
+    const freq = shimBase + i * 700 + Math.random() * 200;
+    shimO.frequency.setValueAtTime(freq, t + 0.03 + i * 0.04);
+    shimO.frequency.exponentialRampToValueAtTime(freq * 0.4, t + shimDur);
+    shimG.gain.setValueAtTime(0.001, t);
+    shimG.gain.linearRampToValueAtTime(0.05 * intensity / (i + 1), t + 0.06 + i * 0.04);
+    shimG.gain.exponentialRampToValueAtTime(0.001, t + shimDur);
+    shimO.connect(shimG).connect(audioCtx.destination);
+    shimO.start(t + 0.03 + i * 0.04);
+    shimO.stop(t + shimDur);
+  }
+
+  // 3. 深空低頻共鳴 —— 緩慢脈動的低頻，如太空背景輻射
+  const padDur = 0.6 + level * 0.06;
+  const padO = audioCtx.createOscillator();
+  const padG = audioCtx.createGain();
+  padO.type = 'triangle';
+  padO.frequency.setValueAtTime(90 + level * 8, t);
+  padO.frequency.exponentialRampToValueAtTime(50 + level * 3, t + padDur);
+  padG.gain.setValueAtTime(0.001, t);
+  padG.gain.linearRampToValueAtTime(0.1 * intensity, t + 0.1);
+  padG.gain.exponentialRampToValueAtTime(0.001, t + padDur);
+  padO.connect(padG).connect(audioCtx.destination);
+  padO.start(t);
+  padO.stop(t + padDur);
+
+  // 4. 太空靜電碎片 —— 極輕的高頻噪聲碎片
+  const statDur = 0.15 + level * 0.02;
+  const statSz = Math.floor(audioCtx.sampleRate * statDur);
+  const statBuf = audioCtx.createBuffer(1, statSz, audioCtx.sampleRate);
+  const statData = statBuf.getChannelData(0);
+  for (let i = 0; i < statSz; i++) {
+    statData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / statSz, 6);
+  }
+  const statSrc = audioCtx.createBufferSource();
+  statSrc.buffer = statBuf;
+  const statG = audioCtx.createGain();
+  statG.gain.setValueAtTime(0.06 * intensity, t + 0.01);
+  statG.gain.exponentialRampToValueAtTime(0.001, t + statDur);
+  const statHPF = audioCtx.createBiquadFilter();
+  statHPF.type = 'highpass';
+  statHPF.frequency.setValueAtTime(5000, t);
+  statSrc.connect(statHPF).connect(statG).connect(audioCtx.destination);
+  statSrc.start(t + 0.01);
+  statSrc.stop(t + statDur + 0.01);
 }
 
 // ─── Leaderboard API ────────────────────────
@@ -1223,6 +1670,100 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+// ─── Settings ────────────────────────────────
+function openSettings() {
+  initSoundTypeSelector();
+  buildSoundPreviewGrid();
+  document.getElementById('settings').classList.remove('hidden');
+}
+
+function closeSettings() {
+  document.getElementById('settings').classList.add('hidden');
+}
+
+function initSoundTypeSelector() {
+  const select = document.getElementById('sound-type-select');
+  select.value = currentSoundType;
+  // 移除舊 listener 避免重複綁定
+  const newSelect = select.cloneNode(true);
+  select.parentNode.replaceChild(newSelect, select);
+  newSelect.value = currentSoundType;
+  newSelect.addEventListener('change', () => {
+    currentSoundType = newSelect.value;
+    localStorage.setItem('neonMergeSoundType', currentSoundType);
+  });
+}
+
+function buildSoundPreviewGrid() {
+  const grid = document.getElementById('sound-preview-grid');
+  grid.innerHTML = '';
+
+  ALL_SHAPES.forEach((shape, level) => {
+    const btn = document.createElement('button');
+    btn.className = 'sound-preview-btn';
+    btn.style.borderColor = shape.color;
+    btn.style.color = shape.color;
+    btn.style.boxShadow = `0 0 12px ${hexToRGBA(shape.color, 0.15)}, inset 0 0 12px ${hexToRGBA(shape.color, 0.08)}`;
+
+    // Mini canvas to draw the shape
+    const miniCanvas = document.createElement('canvas');
+    miniCanvas.width = 48;
+    miniCanvas.height = 48;
+    const mc = miniCanvas.getContext('2d');
+    const scale = 18 / shape.radius;
+    mc.save();
+    mc.translate(24, 24);
+    mc.scale(scale, scale);
+    mc.shadowColor = shape.color;
+    mc.shadowBlur = 10;
+    mc.strokeStyle = shape.color;
+    mc.lineWidth = 4 / scale;
+    mc.fillStyle = hexToRGBA(shape.color, 0.12);
+    mc.beginPath();
+    if (shape.sides === 0) {
+      mc.arc(0, 0, shape.radius, 0, Math.PI * 2);
+    } else {
+      drawPolygonPath(mc, 0, 0, shape.sides, shape.radius);
+    }
+    mc.closePath();
+    mc.fill();
+    mc.stroke();
+    mc.restore();
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'shape-name';
+    nameSpan.textContent = shape.name;
+
+    const levelSpan = document.createElement('span');
+    levelSpan.className = 'shape-level';
+    levelSpan.textContent = `Lv.${level}`;
+
+    btn.appendChild(miniCanvas);
+    btn.appendChild(nameSpan);
+    btn.appendChild(levelSpan);
+
+    btn.addEventListener('click', () => {
+      btn.classList.remove('playing');
+      // Force reflow to restart animation
+      void btn.offsetWidth;
+      btn.classList.add('playing');
+      playMergeSound(level);
+      setTimeout(() => btn.classList.remove('playing'), 500);
+    });
+
+    btn.addEventListener('mouseenter', () => {
+      btn.style.background = hexToRGBA(shape.color, 0.1);
+      btn.style.boxShadow = `0 0 25px ${hexToRGBA(shape.color, 0.3)}, inset 0 0 20px ${hexToRGBA(shape.color, 0.15)}`;
+    });
+    btn.addEventListener('mouseleave', () => {
+      btn.style.background = 'transparent';
+      btn.style.boxShadow = `0 0 12px ${hexToRGBA(shape.color, 0.15)}, inset 0 0 12px ${hexToRGBA(shape.color, 0.08)}`;
+    });
+
+    grid.appendChild(btn);
+  });
 }
 
 // ─── Utilities ───────────────────────────────

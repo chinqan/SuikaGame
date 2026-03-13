@@ -17,6 +17,7 @@
         <span id="score-value">0</span>
       </div>
       <button id="leaderboard-btn" title="排行榜">🏆</button>
+      <button id="settings-btn" title="設定">⚙️</button>
       <div id="next-panel">
         <span class="label">NEXT</span>
         <canvas id="next-canvas" width="60" height="60"></canvas>
@@ -80,6 +81,31 @@
           </table>
         </div>
         <button id="leaderboard-close-btn">關閉</button>
+      </div>
+    </div>
+
+    <!-- Settings overlay -->
+    <div id="settings" class="hidden">
+      <div class="overlay-content settings-content">
+        <h1>⚙️ SETTINGS</h1>
+
+        <div class="settings-section">
+          <h2 class="settings-section-title">🔊 合成音效</h2>
+          <p class="settings-section-desc">選擇音效類型，並點擊下方形狀按鈕試聽</p>
+          <div id="sound-type-selector">
+            <select id="sound-type-select">
+              <option value="standard">📦 標準音效</option>
+              <option value="crystal">💎 水晶音效</option>
+              <option value="waterdrop">💧 水滴聲</option>
+              <option value="bomb">💥 炸彈聲</option>
+              <option value="stone">🪨 堅硬石頭聲</option>
+              <option value="cosmic">🌌 宇宙電波聲</option>
+            </select>
+          </div>
+          <div id="sound-preview-grid"></div>
+        </div>
+
+        <button id="settings-close-btn">關閉</button>
       </div>
     </div>
   </div>
