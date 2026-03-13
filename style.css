@@ -276,3 +276,170 @@ html, body {
   box-shadow: 0 0 30px #ff313144, inset 0 0 30px #ff313122;
   transform: scale(1.05);
 }
+
+/* ---------- Player ID Input ---------- */
+.id-input-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.id-input-group label {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  letter-spacing: 3px;
+  color: rgba(255,255,255,0.5);
+}
+
+#player-id-input {
+  width: 200px;
+  padding: 10px 16px;
+  border: 2px solid rgba(0,255,255,0.4);
+  border-radius: 8px;
+  background: rgba(0,255,255,0.05);
+  color: #00ffff;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+  transition: all 0.3s ease;
+}
+
+#player-id-input::placeholder {
+  color: rgba(0,255,255,0.25);
+  font-weight: 400;
+  font-size: 13px;
+}
+
+#player-id-input:focus {
+  border-color: #00ffff;
+  box-shadow: 0 0 15px #00ffff44, inset 0 0 10px #00ffff11;
+}
+
+/* ---------- Leaderboard Button ---------- */
+#leaderboard-btn {
+  background: none;
+  border: 1px solid rgba(255,215,0,0.3);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 22px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  line-height: 1;
+}
+
+#leaderboard-btn:hover {
+  background: rgba(255,215,0,0.1);
+  box-shadow: 0 0 15px rgba(255,215,0,0.3);
+  transform: scale(1.1);
+}
+
+/* ---------- Leaderboard Overlay ---------- */
+#leaderboard {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 300;
+  background: rgba(5,5,15,0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fadeIn 0.3s ease;
+}
+
+#leaderboard.hidden {
+  display: none;
+}
+
+.leaderboard-content {
+  width: 90%;
+  max-width: 480px;
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.leaderboard-content h1 {
+  color: #FFD700 !important;
+  text-shadow: 0 0 20px #FFD70088, 0 0 60px #FFD70044 !important;
+  font-size: 24px !important;
+  letter-spacing: 3px !important;
+}
+
+#leaderboard-table-wrap {
+  max-height: 55vh;
+  overflow-y: auto;
+  margin: 12px 0;
+  border: 1px solid rgba(255,215,0,0.15);
+  border-radius: 8px;
+}
+
+#leaderboard-table-wrap::-webkit-scrollbar {
+  width: 4px;
+}
+
+#leaderboard-table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(0,255,255,0.3);
+  border-radius: 4px;
+}
+
+#leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'Rajdhani', sans-serif;
+}
+
+#leaderboard-table thead th {
+  position: sticky;
+  top: 0;
+  background: #0d0d1a;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: rgba(255,215,0,0.6);
+  padding: 10px 6px;
+  border-bottom: 1px solid rgba(255,215,0,0.2);
+  text-transform: uppercase;
+}
+
+#leaderboard-table tbody td {
+  padding: 8px 6px;
+  text-align: center;
+  font-size: 14px;
+  color: rgba(255,255,255,0.75);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+#leaderboard-table tbody tr:nth-child(1) td { color: #FFD700; font-weight: 700; }
+#leaderboard-table tbody tr:nth-child(2) td { color: #C0C0C0; font-weight: 600; }
+#leaderboard-table tbody tr:nth-child(3) td { color: #CD7F32; font-weight: 600; }
+
+#leaderboard-table tbody tr:hover td {
+  background: rgba(255,215,0,0.05);
+}
+
+#leaderboard-close-btn {
+  margin-top: 8px;
+  padding: 12px 36px;
+  border: 2px solid #FFD700;
+  border-radius: 8px;
+  background: transparent;
+  color: #FFD700;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  text-shadow: 0 0 8px #FFD70088;
+  box-shadow: 0 0 15px #FFD70022;
+}
+
+#leaderboard-close-btn:hover {
+  background: #FFD70022;
+  box-shadow: 0 0 25px #FFD70044;
+  transform: scale(1.04);
+}

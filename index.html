@@ -16,6 +16,7 @@
         <span class="label">SCORE</span>
         <span id="score-value">0</span>
       </div>
+      <button id="leaderboard-btn" title="排行榜">🏆</button>
       <div id="next-panel">
         <span class="label">NEXT</span>
         <canvas id="next-canvas" width="60" height="60"></canvas>
@@ -44,6 +45,10 @@
     <div id="difficulty-select">
       <div class="overlay-content">
         <h1>SELECT DIFFICULTY</h1>
+        <div class="id-input-group">
+          <label for="player-id-input">PLAYER ID</label>
+          <input type="text" id="player-id-input" placeholder="輸入你的 ID" maxlength="16" value="">
+        </div>
         <p class="diff-subtitle">選擇遊戲難度</p>
         <div class="diff-buttons">
           <button class="diff-btn easy" data-diff="easy">
@@ -59,6 +64,22 @@
             <span class="diff-desc">9 種形狀</span>
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- Leaderboard overlay -->
+    <div id="leaderboard" class="hidden">
+      <div class="overlay-content leaderboard-content">
+        <h1>🏆 LEADERBOARD</h1>
+        <div id="leaderboard-table-wrap">
+          <table id="leaderboard-table">
+            <thead>
+              <tr><th>#</th><th>ID</th><th>分數</th><th>難度</th><th>時間</th><th>日期</th></tr>
+            </thead>
+            <tbody id="leaderboard-body"></tbody>
+          </table>
+        </div>
+        <button id="leaderboard-close-btn">關閉</button>
       </div>
     </div>
   </div>

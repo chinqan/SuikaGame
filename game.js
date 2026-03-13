@@ -46,6 +46,10 @@ let canDrop = true;
 let isGameOver = false;
 let gameOverTimer = null;
 
+// 多人排行榜
+let playerId = 'guest';
+let gameStartTime = 0;
+
 // Particles
 let particles = [];
 
@@ -96,29 +100,45 @@ function init() {
     });
   });
 
+  // 排行榜按鈕
+  document.getElementById('leaderboard-btn').addEventListener('click', openLeaderboard);
+  document.getElementById('leaderboard-close-btn').addEventListener('click', closeLeaderboard);
+
+  // 讀取上次的 ID
+  const savedId = localStorage.getItem('neonMergePlayerId');
+  if (savedId) {
+    document.getElementById('player-id-input').value = savedId;
+  }
+
   // 顯示難度選單，等待選擇
   document.getElementById('difficulty-select').classList.remove('hidden');
 }
 
 function selectDifficulty(diff) {
+  // 讀取玩家 ID
+  const idInput = document.getElementById('player-id-input');
+  playerId = (idInput.value.trim() || 'guest').substring(0, 16);
+  idInput.value = playerId;
+  localStorage.setItem('neonMergePlayerId', playerId);
+
   currentDifficulty = diff;
 
   // 根據難度過濾形狀
   if (diff === 'easy') {
-    SHAPES = ALL_SHAPES.slice(2);  // 移除前2個，剗7個
-    MAX_DROP_LEVEL = 3;            // 0-3 => Square..Hexagon (4個)
+    SHAPES = ALL_SHAPES.slice(2);
+    MAX_DROP_LEVEL = 3;
   } else if (diff === 'normal') {
-    SHAPES = ALL_SHAPES.slice(1);  // 移除前1個，剗8個
-    MAX_DROP_LEVEL = 3;            // 0-3 => SmallCircle..Hexagon (4個)
+    SHAPES = ALL_SHAPES.slice(1);
+    MAX_DROP_LEVEL = 3;
   } else {
-    SHAPES = ALL_SHAPES.slice(0);  // 全部9個
-    MAX_DROP_LEVEL = 4;            // 0-4 => Triangle..Hexagon (5個)
+    SHAPES = ALL_SHAPES.slice(0);
+    MAX_DROP_LEVEL = 4;
   }
 
-  // 隱藏難度選單
-  document.getElementById('difficulty-select').classList.add('hidden');
+  // 記錄開始時間
+  gameStartTime = Date.now();
 
-  // 啟動遊戲
+  document.getElementById('difficulty-select').classList.add('hidden');
   startGame();
 }
 
@@ -999,6 +1019,11 @@ function triggerGameOver() {
   document.getElementById('final-score').textContent = score;
   document.getElementById('high-score').textContent = highScore;
   document.getElementById('game-over').classList.remove('hidden');
+
+  // 提交分數到後端
+  const playTimeMs = Date.now() - gameStartTime;
+  const playTimeSec = Math.round(playTimeMs / 1000);
+  submitScore(playerId, score, currentDifficulty, playTimeSec);
 }
 
 function restart() {
@@ -1135,6 +1160,69 @@ function playMergeSound(level) {
   rO.connect(rG).connect(comp);
   rO.start(t);
   rO.stop(t + 0.45);
+}
+
+// ─── Leaderboard API ────────────────────────
+async function submitScore(pid, sc, diff, playTimeSec) {
+  try {
+    await fetch('/api/scores', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        player_id: pid,
+        score: sc,
+        difficulty: diff,
+        play_time: playTimeSec
+      })
+    });
+  } catch (e) {
+    console.warn('Failed to submit score:', e);
+  }
+}
+
+function openLeaderboard() {
+  loadLeaderboard();
+  document.getElementById('leaderboard').classList.remove('hidden');
+}
+
+function closeLeaderboard() {
+  document.getElementById('leaderboard').classList.add('hidden');
+}
+
+async function loadLeaderboard() {
+  const tbody = document.getElementById('leaderboard-body');
+  tbody.innerHTML = '<tr><td colspan="6" style="color:rgba(255,255,255,0.3)">載入中...</td></tr>';
+  try {
+    const res = await fetch('/api/scores');
+    const data = await res.json();
+    if (!data.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:rgba(255,255,255,0.3)">尚無紀錄</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.map((row, i) => {
+      const mins = Math.floor(row.play_time / 60);
+      const secs = row.play_time % 60;
+      const timeStr = `${mins}:${String(secs).padStart(2, '0')}`;
+      const diffLabel = { easy: 'Easy', normal: 'Normal', hard: 'Hard' }[row.difficulty] || row.difficulty;
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${escapeHtml(row.player_id)}</td>
+        <td>${row.score.toLocaleString()}</td>
+        <td>${diffLabel}</td>
+        <td>${timeStr}</td>
+        <td>${row.created_at}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:#ff3131">無法連線伺服器</td></tr>';
+    console.warn('Failed to load leaderboard:', e);
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
 
 // ─── Utilities ───────────────────────────────
