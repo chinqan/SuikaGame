@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Neon Shape Merge</title>
+  <meta name="description" content="Neon Shape Merge – 霓虹幾何合成益智遊戲">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+</head>
+<body>
+  <div id="game-wrapper">
+    <!-- Score -->
+    <div id="hud">
+      <div id="score-panel">
+        <span class="label">SCORE</span>
+        <span id="score-value">0</span>
+      </div>
+      <div id="next-panel">
+        <span class="label">NEXT</span>
+        <canvas id="next-canvas" width="60" height="60"></canvas>
+      </div>
+    </div>
+
+    <!-- Main canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Evolution bar -->
+    <div id="evolution-bar">
+      <canvas id="evo-canvas" height="50"></canvas>
+    </div>
+
+    <!-- Game Over overlay -->
+    <div id="game-over" class="hidden">
+      <div class="overlay-content">
+        <h1>GAME OVER</h1>
+        <p>最終分數：<span id="final-score">0</span></p>
+        <p>最高紀錄：<span id="high-score">0</span></p>
+        <button id="restart-btn">再來一局</button>
+      </div>
+    </div>
+
+    <!-- Difficulty Select overlay -->
+    <div id="difficulty-select">
+      <div class="overlay-content">
+        <h1>SELECT DIFFICULTY</h1>
+        <p class="diff-subtitle">選擇遊戲難度</p>
+        <div class="diff-buttons">
+          <button class="diff-btn easy" data-diff="easy">
+            <span class="diff-label">EASY</span>
+            <span class="diff-desc">7 種形狀</span>
+          </button>
+          <button class="diff-btn normal" data-diff="normal">
+            <span class="diff-label">NORMAL</span>
+            <span class="diff-desc">8 種形狀</span>
+          </button>
+          <button class="diff-btn hard" data-diff="hard">
+            <span class="diff-label">HARD</span>
+            <span class="diff-desc">9 種形狀</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
