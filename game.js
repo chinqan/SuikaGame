@@ -462,7 +462,11 @@ function updateParticles() {
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.life -= p.decay;
-    if (p.life <= 0) { particleContainer.removeChild(p.display); p.display.destroy(); particles.splice(i, 1); continue; }
+    if (p.life <= 0) {
+      particleContainer.removeChild(p.display); p.display.destroy();
+      particles[i] = particles[particles.length - 1]; particles.pop();
+      continue;
+    }
     if (p.type === 'ring') {
       p.radius += (p.maxRadius - p.radius) * 0.15;
       const g = p.display; g.clear();
@@ -480,7 +484,7 @@ function updateParticles() {
   for (let i = floatingTexts.length - 1; i >= 0; i--) {
     const ft = floatingTexts[i];
     ft.life -= ft.decay;
-    if (ft.life <= 0) { uiContainer.removeChild(ft.display); ft.display.destroy(); floatingTexts.splice(i, 1); continue; }
+    if (ft.life <= 0) { uiContainer.removeChild(ft.display); ft.display.destroy(); floatingTexts[i] = floatingTexts[floatingTexts.length - 1]; floatingTexts.pop(); continue; }
     ft.display.y += ft.vy;
     ft.vy *= 0.97;
     ft.display.alpha = ft.life;
@@ -558,29 +562,38 @@ function drawGameOverLine() {
 }
 
 // ─── Aim Guide ───────────────────────────────
+let aimLineGfx = null, aimGhostGfx = null, aimGhostLevel = -1;
 function drawAimGuide() {
-  aimGuideContainer.removeChildren();
-  if (!canDrop || isGameOver) return;
+  if (!canDrop || isGameOver) {
+    if (aimLineGfx) aimLineGfx.visible = false;
+    if (aimGhostGfx) aimGhostGfx.visible = false;
+    return;
+  }
   const shape = SHAPES[currentLevel];
   const r = shape.radius;
   const x = Math.max(gameInsetX + r + 4, Math.min(canvasW - gameInsetX - r - 4, dropX));
 
-  const g = new PIXI.Graphics();
-  // Dashed vertical line
+  // Reuse or create line graphics
+  if (!aimLineGfx) { aimLineGfx = new PIXI.Graphics(); aimGuideContainer.addChild(aimLineGfx); }
+  aimLineGfx.clear(); aimLineGfx.visible = true;
   let cy = r + 4;
   while (cy < gameAreaH) {
     const end = Math.min(cy + 4, gameAreaH);
-    g.moveTo(x, cy).lineTo(x, end).stroke({ color: 0xffffff, width: 1, alpha: 0.12 });
+    aimLineGfx.moveTo(x, cy).lineTo(x, end).stroke({ color: 0xffffff, width: 1, alpha: 0.12 });
     cy += 10;
   }
-  aimGuideContainer.addChild(g);
 
-  // Preview shape ghost
-  const ghost = new PIXI.Graphics();
-  drawNeonShape(ghost, shape, r, false);
-  ghost.x = x; ghost.y = r + 8;
-  ghost.alpha = 0.55;
-  aimGuideContainer.addChild(ghost);
+  // Reuse or create ghost graphics (only recreate when level changes)
+  if (!aimGhostGfx || aimGhostLevel !== currentLevel) {
+    if (aimGhostGfx) { aimGuideContainer.removeChild(aimGhostGfx); aimGhostGfx.destroy(); }
+    aimGhostGfx = new PIXI.Graphics();
+    drawNeonShape(aimGhostGfx, shape, r, false);
+    aimGhostGfx.alpha = 0.55;
+    aimGuideContainer.addChild(aimGhostGfx);
+    aimGhostLevel = currentLevel;
+  }
+  aimGhostGfx.visible = true;
+  aimGhostGfx.x = x; aimGhostGfx.y = r + 8;
 }
 
 // ─── Grid Flows (animated) ───────────────────
@@ -598,7 +611,11 @@ function updateGridFlows() {
   if (gridFlows.length < 20 && Math.random() < 0.06) spawnGridFlow();
   for (let i = gridFlows.length - 1; i >= 0; i--) {
     gridFlows[i].t += gridFlows[i].speed;
-    if (gridFlows[i].t > 1) gridFlows.splice(i, 1);
+    if (gridFlows[i].t > 1) {
+      // Swap-remove: avoid expensive splice
+      gridFlows[i] = gridFlows[gridFlows.length - 1];
+      gridFlows.pop();
+    }
   }
 }
 
@@ -630,16 +647,10 @@ function drawGridFlowsPixi() {
     const flicker = 0.6 + 0.4 * Math.sin(f.t * 40 + f.lineIdx * 7);
     const alpha = f.brightness * Math.max(0, 1 - Math.abs(f.t - 0.5) * 2.2) * flicker;
     if (alpha <= 0) continue;
-    // Radial gradient glow: multiple concentric circles, center=opaque, edge=transparent
-    const layers = 6;
-    const maxR = f.size * 3;
-    for (let l = layers - 1; l >= 0; l--) {
-      const frac = l / (layers - 1); // 0=center, 1=edge
-      const r = maxR * (0.1 + 0.9 * frac);
-      const layerAlpha = alpha * (1 - frac * 0.85);
-      const color = frac < 0.3 ? 0xffffff : 0x00ffff;
-      gridFlowGfx.circle(px, py, r).fill({ color, alpha: layerAlpha * (frac < 0.3 ? 1 : 0.5) });
-    }
+    // Optimized 3-layer glow: outer cyan, mid cyan, bright core
+    gridFlowGfx.circle(px, py, f.size * 3).fill({ color: 0x00ffff, alpha: alpha * 0.08 });
+    gridFlowGfx.circle(px, py, f.size * 1.5).fill({ color: 0x00ffff, alpha: alpha * 0.25 });
+    gridFlowGfx.circle(px, py, f.size * 0.5).fill({ color: 0xffffff, alpha: Math.min(1, alpha * 1.1) });
   }
 }
 
