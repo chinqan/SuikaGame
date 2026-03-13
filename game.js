@@ -4,15 +4,15 @@
 
 // ─── Shape Definitions ───────────────────────
 const ALL_SHAPES = [
-  { name: 'Triangle', sides: 3, radius: 18, color: '#00FFFF', score: 1 },
-  { name: 'Small Circle', sides: 0, radius: 22, color: '#FFFF00', score: 3 },
-  { name: 'Square', sides: 4, radius: 28, color: '#FF6B6B', score: 6 },
-  { name: 'Pentagon', sides: 5, radius: 36, color: '#39FF14', score: 10 },
-  { name: 'Hexagon', sides: 6, radius: 44, color: '#FF8C00', score: 15 },
-  { name: 'Circle', sides: 0, radius: 54, color: '#FF00FF', score: 21 },
-  { name: 'Large Square', sides: 4, radius: 68, color: '#BF00FF', score: 28 },
-  { name: 'Large Hexagon', sides: 6, radius: 80, color: '#00FF88', score: 36 },
-  { name: 'Large Circle', sides: 0, radius: 96, color: '#FFFFFF', score: 50 },
+  { name: 'Triangle', sides: 3, radius: 23, color: '#00FFFF', score: 1 },
+  { name: 'Small Circle', sides: 0, radius: 29, color: '#FFFF00', score: 3 },
+  { name: 'Square', sides: 4, radius: 36, color: '#FF6B6B', score: 6 },
+  { name: 'Pentagon', sides: 5, radius: 47, color: '#39FF14', score: 10 },
+  { name: 'Hexagon', sides: 6, radius: 57, color: '#FF8C00', score: 15 },
+  { name: 'Circle', sides: 0, radius: 70, color: '#FF00FF', score: 21 },
+  { name: 'Large Square', sides: 4, radius: 88, color: '#BF00FF', score: 28 },
+  { name: 'Large Hexagon', sides: 6, radius: 104, color: '#00FF88', score: 36 },
+  { name: 'Large Circle', sides: 0, radius: 125, color: '#FFFFFF', score: 50 },
 ];
 
 let SHAPES = ALL_SHAPES;
@@ -200,8 +200,7 @@ async function initNextPreview() {
 }
 
 async function initEvoBar() {
-  const evoEl = document.getElementById('evolution-bar');
-  const evoW = evoEl.getBoundingClientRect().width - 20;
+  const evoW = DESIGN_W - 20;
   evoApp = new PIXI.Application();
   await evoApp.init({ width: evoW, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
   const ec = document.getElementById('evo-container');
@@ -686,8 +685,7 @@ function drawEvolutionBar() {
   if (!evoApp) return;
   evoApp.stage.removeChildren();
   const count = SHAPES.length;
-  const evoEl = document.getElementById('evo-container');
-  const w = evoEl ? evoEl.getBoundingClientRect().width : 500;
+  const w = DESIGN_W - 20;
   const h = 80;
   const minR = 11, maxR = 34;
 
@@ -705,7 +703,7 @@ function drawEvolutionBar() {
   const slotScale = w / totalDiameters;
 
   // Step 4: Place each shape centered in its slot
-  let curX = 20;
+  let curX = 0;
   for (let i = 0; i < count; i++) {
     const shape = SHAPES[i];
     const displayR = radii[i];
