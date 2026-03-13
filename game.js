@@ -1,23 +1,20 @@
 /* ============================================
-   Neon Shape Merge – Game Logic (v2)
+   Neon Shape Merge – PixiJS v8 + Matter.js
    ============================================ */
 
 // ─── Shape Definitions ───────────────────────
-// [修改3] 移除凹型多邊形（星星），全部使用凸型多邊形
-// 參考圖片：三角形→圓形(小)→正方形→五角形→六角形→圓形(中)→大正方形→大圓形
 const ALL_SHAPES = [
-  { name: 'Triangle',      sides: 3,  radius: 18, color: '#00FFFF', score: 1  },
-  { name: 'Small Circle',  sides: 0,  radius: 22, color: '#FFFF00', score: 3  },
-  { name: 'Square',        sides: 4,  radius: 28, color: '#FF6B6B', score: 6  },
-  { name: 'Pentagon',      sides: 5,  radius: 36, color: '#39FF14', score: 10 },
-  { name: 'Hexagon',       sides: 6,  radius: 44, color: '#FF8C00', score: 15 },
-  { name: 'Circle',        sides: 0,  radius: 54, color: '#FF00FF', score: 21 },
-  { name: 'Large Square',  sides: 4,  radius: 68, color: '#BF00FF', score: 28 },
-  { name: 'Large Hexagon', sides: 6,  radius: 80, color: '#00FF88', score: 36 },
-  { name: 'Large Circle',  sides: 0,  radius: 96, color: '#FFFFFF', score: 50 },
+  { name: 'Triangle', sides: 3, radius: 18, color: '#00FFFF', score: 1 },
+  { name: 'Small Circle', sides: 0, radius: 22, color: '#FFFF00', score: 3 },
+  { name: 'Square', sides: 4, radius: 28, color: '#FF6B6B', score: 6 },
+  { name: 'Pentagon', sides: 5, radius: 36, color: '#39FF14', score: 10 },
+  { name: 'Hexagon', sides: 6, radius: 44, color: '#FF8C00', score: 15 },
+  { name: 'Circle', sides: 0, radius: 54, color: '#FF00FF', score: 21 },
+  { name: 'Large Square', sides: 4, radius: 68, color: '#BF00FF', score: 28 },
+  { name: 'Large Hexagon', sides: 6, radius: 80, color: '#00FF88', score: 36 },
+  { name: 'Large Circle', sides: 0, radius: 96, color: '#FFFFFF', score: 50 },
 ];
 
-// 難度設定
 let SHAPES = ALL_SHAPES;
 let MAX_DROP_LEVEL = 4;
 let currentDifficulty = 'hard';
@@ -26,16 +23,16 @@ let currentDifficulty = 'hard';
 const { Engine, Runner, Bodies, Body, Composite, Events } = Matter;
 
 let engine, runner;
-let canvas, ctx;
-let canvasW, canvasH;
+let app; // PixiJS Application
+const DESIGN_W = 546, DESIGN_H = 779;
+let canvasW = DESIGN_W, canvasH = DESIGN_H;
 let wallThickness = 30;
 let containerLeft, containerRight, containerBottom;
 let gameOverLineY;
 
-// 遊戲容器內縮與底部地板
-const gameInsetX = 35;  // 左右內縮距離
-const floorAreaH = 100; // 底部 3D 地板預留高度
-let gameAreaH;          // 實際遊戲區高度 (canvasH - floorAreaH)
+const gameInsetX = 35;
+const floorAreaH = 70;
+let gameAreaH;
 
 let score = 0;
 let highScore = parseInt(localStorage.getItem('neonMergeHigh') || '0');
@@ -46,126 +43,208 @@ let canDrop = true;
 let isGameOver = false;
 let gameOverTimer = null;
 
-// 多人排行榜
 let playerId = 'guest';
 let gameStartTime = 0;
-
-// 音效類型
 let currentSoundType = localStorage.getItem('neonMergeSoundType') || 'standard';
 
-// Particles
 let particles = [];
-
-// 浮動加分文字
 let floatingTexts = [];
-
-// Combo 連擊
 let comboCount = 0;
 let comboTimer = null;
-const COMBO_WINDOW = 1200; // 1.2 秒內連續消除算 combo
-
-// Screen shake
+const COMBO_WINDOW = 1200;
 let shakeAmount = 0;
-
-// 電子流動粒子
 let gridFlows = [];
-
-// Audio context
 let audioCtx = null;
 
-// Bodies tracking: Map<Matter.Body.id, shapeLevel>
 const bodyLevelMap = new Map();
-
-// Merge cooldown set to prevent double merges
 const mergeCooldown = new Set();
 
-// ─── Init ────────────────────────────────────
-function init() {
-  canvas = document.getElementById('game-canvas');
-  ctx = canvas.getContext('2d');
+// PixiJS layer references
+let bgContainer, wallGlowContainer, gameOverLineGfx, shapesContainer;
+let particleContainer, uiContainer, aimGuideContainer;
+let bodyGraphicsMap = new Map(); // Matter body id -> PIXI.Graphics
 
-  resize();
-  window.addEventListener('resize', resize);
+// Next preview & evo bar PixiJS apps
+let nextApp, evoApp;
+
+// ─── PixiJS helpers ──────────────────────────
+function hexToNum(hex) {
+  return parseInt(hex.slice(1), 16);
+}
+
+function hexToRGBA(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function buildPolygonPoints(cx, cy, sides, r) {
+  const pts = [];
+  for (let i = 0; i < sides; i++) {
+    const a = (Math.PI * 2 * i) / sides - Math.PI / 2;
+    pts.push(cx + r * Math.cos(a), cy + r * Math.sin(a));
+  }
+  return pts;
+}
+
+function drawNeonShape(g, shape, r, withGlow) {
+  const color = hexToNum(shape.color);
+  g.clear();
+
+  // Glow layers (3 layers of increasing alpha for neon effect)
+  if (withGlow) {
+    for (let i = 3; i >= 1; i--) {
+      const glowR = r + i * 4;
+      const alpha = 0.08 / i;
+      if (shape.sides === 0) {
+        g.circle(0, 0, glowR).fill({ color, alpha });
+      } else {
+        g.poly(buildPolygonPoints(0, 0, shape.sides, glowR)).fill({ color, alpha });
+      }
+    }
+  }
+
+  // Fill (very dim)
+  if (shape.sides === 0) {
+    g.circle(0, 0, r).fill({ color, alpha: 0.08 });
+    g.circle(0, 0, r).stroke({ color, width: 6, alpha: 1 });
+    // Inner ring
+    g.circle(0, 0, r * 0.55).stroke({ color, width: 3, alpha: 0.2 });
+  } else {
+    const pts = buildPolygonPoints(0, 0, shape.sides, r);
+    g.poly(pts).fill({ color, alpha: 0.08 });
+    g.poly(pts).stroke({ color, width: 6, alpha: 1 });
+    const innerPts = buildPolygonPoints(0, 0, shape.sides, r * 0.55);
+    g.poly(innerPts).stroke({ color, width: 3, alpha: 0.2 });
+  }
+}
+
+// ─── Init ────────────────────────────────────
+async function init() {
+  canvasW = DESIGN_W;
+  canvasH = DESIGN_H;
+  gameAreaH = canvasH - floorAreaH;
+  gameOverLineY = 55;
+
+  // Create main PixiJS app with fixed design resolution
+  app = new PIXI.Application();
+  await app.init({
+    width: canvasW,
+    height: canvasH,
+    backgroundColor: 0x0a0a0f,
+    antialias: true,
+    resolution: window.devicePixelRatio || 1,
+    autoDensity: true,
+  });
+  const container = document.getElementById('game-canvas-container');
+  container.appendChild(app.canvas);
+  app.canvas.style.width = canvasW + 'px';
+  app.canvas.style.height = canvasH + 'px';
+
+  // Create layer containers
+  bgContainer = new PIXI.Container();
+  wallGlowContainer = new PIXI.Container();
+  gameOverLineGfx = new PIXI.Graphics();
+  shapesContainer = new PIXI.Container();
+  particleContainer = new PIXI.Container();
+  uiContainer = new PIXI.Container();
+  aimGuideContainer = new PIXI.Container();
+
+  app.stage.addChild(bgContainer, wallGlowContainer, gameOverLineGfx,
+    shapesContainer, particleContainer, uiContainer, aimGuideContainer);
 
   // Input
-  canvas.addEventListener('mousemove', onPointerMove);
-  canvas.addEventListener('mousedown', onPointerDown);
-  canvas.addEventListener('touchmove', onTouchMove, { passive: false });
-  canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+  app.canvas.addEventListener('mousemove', onPointerMove);
+  app.canvas.addEventListener('mousedown', onPointerDown);
+  app.canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+  app.canvas.addEventListener('touchstart', onTouchStart, { passive: false });
 
-  // Restart
+  // Buttons
   document.getElementById('restart-btn').addEventListener('click', restart);
-
-  // 難度選擇按鈕
   document.querySelectorAll('.diff-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      selectDifficulty(btn.dataset.diff);
-    });
+    btn.addEventListener('click', () => selectDifficulty(btn.dataset.diff));
   });
-
-  // 排行榜按鈕
   document.getElementById('leaderboard-btn').addEventListener('click', openLeaderboard);
   document.getElementById('leaderboard-close-btn').addEventListener('click', closeLeaderboard);
-
-  // 設定按鈕
   document.getElementById('settings-btn').addEventListener('click', openSettings);
   document.getElementById('settings-close-btn').addEventListener('click', closeSettings);
 
-  // 讀取上次的 ID
   const savedId = localStorage.getItem('neonMergePlayerId');
-  if (savedId) {
-    document.getElementById('player-id-input').value = savedId;
-  }
+  if (savedId) document.getElementById('player-id-input').value = savedId;
 
-  // 顯示難度選單，等待選擇
+  // Draw static backgrounds
+  drawBgScene();
+  drawWallGlow();
+  drawGameOverLine();
+
+  // Init next preview & evo bar
+  await initNextPreview();
+  await initEvoBar();
+
+  window.addEventListener('resize', onResize);
+  onResize(); // apply initial scale
   document.getElementById('difficulty-select').classList.remove('hidden');
 }
 
+async function initNextPreview() {
+  nextApp = new PIXI.Application();
+  await nextApp.init({ width: 80, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0.3, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+  const nc = document.getElementById('next-container');
+  nc.innerHTML = '';
+  nc.appendChild(nextApp.canvas);
+  nextApp.canvas.style.width = '80px';
+  nextApp.canvas.style.height = '80px';
+  nextApp.canvas.style.borderRadius = '8px';
+  nextApp.canvas.style.border = '1px solid rgba(255,255,255,0.1)';
+}
+
+async function initEvoBar() {
+  const evoEl = document.getElementById('evolution-bar');
+  const evoW = evoEl.getBoundingClientRect().width - 20;
+  evoApp = new PIXI.Application();
+  await evoApp.init({ width: evoW, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+  const ec = document.getElementById('evo-container');
+  ec.innerHTML = '';
+  ec.appendChild(evoApp.canvas);
+  evoApp.canvas.style.width = evoW + 'px';
+  evoApp.canvas.style.height = '80px';
+}
+
 function selectDifficulty(diff) {
-  // 讀取玩家 ID
   const idInput = document.getElementById('player-id-input');
   playerId = (idInput.value.trim() || 'guest').substring(0, 16);
   idInput.value = playerId;
   localStorage.setItem('neonMergePlayerId', playerId);
-
   currentDifficulty = diff;
-
-  // 根據難度過濾形狀
-  if (diff === 'easy') {
-    SHAPES = ALL_SHAPES.slice(2);
-    MAX_DROP_LEVEL = 3;
-  } else if (diff === 'normal') {
-    SHAPES = ALL_SHAPES.slice(1);
-    MAX_DROP_LEVEL = 3;
-  } else {
-    SHAPES = ALL_SHAPES.slice(0);
-    MAX_DROP_LEVEL = 4;
-  }
-
-  // 記錄開始時間
+  if (diff === 'easy') { SHAPES = ALL_SHAPES.slice(2); MAX_DROP_LEVEL = 3; }
+  else if (diff === 'normal') { SHAPES = ALL_SHAPES.slice(1); MAX_DROP_LEVEL = 3; }
+  else { SHAPES = ALL_SHAPES.slice(0); MAX_DROP_LEVEL = 4; }
   gameStartTime = Date.now();
-
   document.getElementById('difficulty-select').classList.add('hidden');
   startGame();
 }
 
 function startGame() {
-  // 如果已有 engine，清除舊的
   if (engine) {
     const bodies = Composite.allBodies(engine.world);
     for (const body of bodies) {
-      if (bodyLevelMap.has(body.id)) {
-        Composite.remove(engine.world, body);
-      }
+      if (bodyLevelMap.has(body.id)) Composite.remove(engine.world, body);
     }
     bodyLevelMap.clear();
     mergeCooldown.clear();
-    particles.length = 0;
-    floatingTexts.length = 0;
     Runner.stop(runner);
   }
+  // Clear PixiJS shape graphics
+  shapesContainer.removeChildren();
+  bodyGraphicsMap.forEach(g => g.destroy());
+  bodyGraphicsMap.clear();
+  // Clear particles
+  particleContainer.removeChildren();
+  particles.length = 0;
+  uiContainer.removeChildren();
+  floatingTexts.length = 0;
 
-  // 重置狀態
   score = 0;
   document.getElementById('score-value').textContent = '0';
   isGameOver = false;
@@ -175,904 +254,525 @@ function startGame() {
   comboCount = 0;
   if (comboTimer) { clearTimeout(comboTimer); comboTimer = null; }
 
-  // 建立物理引擎
   engine = Engine.create({
     gravity: { x: 0, y: 2.2 },
     positionIterations: 12,
     velocityIterations: 10,
     constraintIterations: 4
   });
-
   createWalls();
   Events.on(engine, 'collisionStart', onCollision);
 
   currentLevel = randLevel();
   nextLevel = randLevel();
-
   runner = Runner.create({ delta: 1000 / 120 });
   Runner.run(runner, engine);
+
   drawNextPreview();
   drawEvolutionBar();
-
   document.getElementById('game-over').classList.add('hidden');
-  requestAnimationFrame(gameLoop);
+
+  // Start game loop via ticker
+  app.ticker.remove(gameLoop);
+  app.ticker.add(gameLoop);
 }
 
-// [修改1] 畫面高度減小，加快遊戲節奏
-function resize() {
+// ─── Resize ──────────────────────────────────
+function onResize() {
   const wrapper = document.getElementById('game-wrapper');
-  const hud = document.getElementById('hud');
-  const evo = document.getElementById('evolution-bar');
-  const hudH = hud.getBoundingClientRect().height;
-  const evoH = evo.getBoundingClientRect().height;
-
-  canvasW = Math.min(wrapper.getBoundingClientRect().width, 546);
-  const maxCanvasH = 879;
-  canvasH = Math.min(window.innerHeight - hudH - evoH - 20, maxCanvasH);
-  gameAreaH = canvasH - floorAreaH;
-  canvas.width = canvasW;
-  canvas.height = canvasH;
-  canvas.style.width = canvasW + 'px';
-  canvas.style.height = canvasH + 'px';
-
-  gameOverLineY = 55;
-
-  // Recreate walls if engine exists
-  if (engine) {
-    createWalls();
-  }
-
-  // Evo canvas width
-  const evoCanvas = document.getElementById('evo-canvas');
-  evoCanvas.width = evo.getBoundingClientRect().width - 20;
-  drawEvolutionBar();
+  // Calculate uniform scale to fit viewport
+  const viewW = window.innerWidth;
+  const viewH = window.innerHeight;
+  // Get wrapper's natural size (fixed design)
+  wrapper.style.transform = 'none';
+  const naturalW = wrapper.offsetWidth;
+  const naturalH = wrapper.offsetHeight;
+  const scaleX = viewW / naturalW;
+  const scaleY = viewH / naturalH;
+  const scale = Math.min(scaleX, scaleY, 1); // never upscale beyond 1
+  wrapper.style.transform = `scale(${scale})`;
+  wrapper.style.transformOrigin = 'top center';
 }
 
 // ─── Walls ───────────────────────────────────
 function createWalls() {
-  // Remove old walls
   if (containerLeft) Composite.remove(engine.world, containerLeft);
   if (containerRight) Composite.remove(engine.world, containerRight);
   if (containerBottom) Composite.remove(engine.world, containerBottom);
-
-  // [修改6] 更大的牆壁、更高的摩擦力和更低的彈性
-  const opts = {
-    isStatic: true,
-    friction: 1.0,
-    restitution: 0.1,
-    frictionStatic: 1.0,
-    render: { visible: false }
-  };
-
-  // 牆壁使用 gameInsetX 內縮
-  containerLeft = Bodies.rectangle(
-    gameInsetX - wallThickness / 2 + 2, canvasH / 2,
-    wallThickness, canvasH * 3,
-    opts
-  );
-  containerRight = Bodies.rectangle(
-    canvasW - gameInsetX + wallThickness / 2 - 2, canvasH / 2,
-    wallThickness, canvasH * 3,
-    opts
-  );
-  containerBottom = Bodies.rectangle(
-    canvasW / 2, gameAreaH + wallThickness / 2 - 2,
-    canvasW * 3, wallThickness,
-    opts
-  );
-
+  const opts = { isStatic: true, friction: 1.0, restitution: 0.1, frictionStatic: 1.0 };
+  containerLeft = Bodies.rectangle(gameInsetX - wallThickness / 2 + 2, canvasH / 2, wallThickness, canvasH * 3, opts);
+  containerRight = Bodies.rectangle(canvasW - gameInsetX + wallThickness / 2 - 2, canvasH / 2, wallThickness, canvasH * 3, opts);
+  containerBottom = Bodies.rectangle(canvasW / 2, gameAreaH + wallThickness / 2 - 2, canvasW * 3, wallThickness, opts);
   Composite.add(engine.world, [containerLeft, containerRight, containerBottom]);
 }
 
-// ─── Random Level ────────────────────────────
-function randLevel() {
-  return Math.floor(Math.random() * (MAX_DROP_LEVEL + 1));
-}
+function randLevel() { return Math.floor(Math.random() * (MAX_DROP_LEVEL + 1)); }
 
 // ─── Drop Shape ──────────────────────────────
 function dropShape(x) {
   if (!canDrop || isGameOver) return;
   canDrop = false;
-
   const level = currentLevel;
   const shape = SHAPES[level];
-  // 限制投放位置在遊戲區域內
   x = Math.max(gameInsetX + shape.radius + 4, Math.min(canvasW - gameInsetX - shape.radius - 4, x));
   const body = createShapeBody(x, -shape.radius, level);
-
   bodyLevelMap.set(body.id, level);
   Composite.add(engine.world, body);
 
-  playDropSound();
+  // Create PixiJS graphics for this body
+  const g = new PIXI.Graphics();
+  drawNeonShape(g, shape, shape.radius, true);
+  g.x = x;
+  g.y = -shape.radius;
+  shapesContainer.addChild(g);
+  bodyGraphicsMap.set(body.id, g);
 
+  playDropSound();
   currentLevel = nextLevel;
   nextLevel = randLevel();
   drawNextPreview();
-
-  // Cooldown before next drop
   setTimeout(() => { canDrop = true; }, 450);
 }
 
-// ─── Create Physics Body ─────────────────────
 function createShapeBody(x, y, level) {
   const shape = SHAPES[level];
-  const r = shape.radius;
-
-  // 所有形狀統一使用圓形碰撞體，徹底避免尖角穿透
-  // 視覺上仍繪製為多邊形，但物理碰撞用圓形保證精確
-  const body = Bodies.circle(x, y, r, {
-    restitution: 0.15,
-    friction: 0.6,
-    frictionStatic: 0.8,
-    density: 0.0015 + level * 0.0004,
-    slop: 0.005,
-    label: 'shape'
+  return Bodies.circle(x, y, shape.radius, {
+    restitution: 0.15, friction: 0.6, frictionStatic: 0.8,
+    density: 0.0015 + level * 0.0004, slop: 0.005, label: 'shape'
   });
-  return body;
 }
 
 // ─── Collision → Merge ───────────────────────
 function onCollision(event) {
   for (const pair of event.pairs) {
-    const a = pair.bodyA;
-    const b = pair.bodyB;
-
+    const a = pair.bodyA, b = pair.bodyB;
     if (a.label !== 'shape' || b.label !== 'shape') continue;
-
-    const levelA = bodyLevelMap.get(a.id);
-    const levelB = bodyLevelMap.get(b.id);
-    if (levelA === undefined || levelB === undefined) continue;
-    if (levelA !== levelB) continue;
-
-    // Cooldown check
+    const levelA = bodyLevelMap.get(a.id), levelB = bodyLevelMap.get(b.id);
+    if (levelA === undefined || levelB === undefined || levelA !== levelB) continue;
     if (mergeCooldown.has(a.id) || mergeCooldown.has(b.id)) continue;
-    mergeCooldown.add(a.id);
-    mergeCooldown.add(b.id);
+    mergeCooldown.add(a.id); mergeCooldown.add(b.id);
 
     const level = levelA;
     const newLevel = level + 1;
-
-    // Midpoint
     const mx = (a.position.x + b.position.x) / 2;
     const my = (a.position.y + b.position.y) / 2;
 
-    // Remove old
-    Composite.remove(engine.world, a);
-    Composite.remove(engine.world, b);
-    bodyLevelMap.delete(a.id);
-    bodyLevelMap.delete(b.id);
-    mergeCooldown.delete(a.id);
-    mergeCooldown.delete(b.id);
+    // Remove old bodies & graphics
+    Composite.remove(engine.world, a); Composite.remove(engine.world, b);
+    bodyLevelMap.delete(a.id); bodyLevelMap.delete(b.id);
+    mergeCooldown.delete(a.id); mergeCooldown.delete(b.id);
+    const gA = bodyGraphicsMap.get(a.id); if (gA) { shapesContainer.removeChild(gA); gA.destroy(); }
+    const gB = bodyGraphicsMap.get(b.id); if (gB) { shapesContainer.removeChild(gB); gB.destroy(); }
+    bodyGraphicsMap.delete(a.id); bodyGraphicsMap.delete(b.id);
 
-    // Score
-    let gained = 0;
-    if (newLevel < SHAPES.length) {
-      gained = SHAPES[newLevel].score;
-    } else {
-      gained = 80;
-    }
+    let gained = newLevel < SHAPES.length ? SHAPES[newLevel].score : 80;
     score += gained;
     document.getElementById('score-value').textContent = score;
 
-    // Combo 連擊
     comboCount++;
     if (comboTimer) clearTimeout(comboTimer);
     comboTimer = setTimeout(() => { comboCount = 0; comboTimer = null; }, COMBO_WINDOW);
 
-    // 浮動加分文字
-    const scoreColor = (newLevel < SHAPES.length) ? SHAPES[newLevel].color : '#FFFFFF';
+    const scoreColor = newLevel < SHAPES.length ? SHAPES[newLevel].color : '#FFFFFF';
     spawnFloatingText(mx, my, '+' + gained, scoreColor);
-    if (comboCount >= 2) {
-      spawnFloatingText(mx, my - 30, 'COMBO x' + comboCount, '#FFD700', comboCount);
-    }
+    if (comboCount >= 2) spawnFloatingText(mx, my - 30, 'COMBO x' + comboCount, '#FFD700', comboCount);
 
-    // Spawn merged shape (if not max)
     if (newLevel < SHAPES.length) {
       const newBody = createShapeBody(mx, my, newLevel);
       bodyLevelMap.set(newBody.id, newLevel);
       Composite.add(engine.world, newBody);
       Body.setVelocity(newBody, { x: (Math.random() - 0.5) * 1.5, y: -1.5 });
+      const ng = new PIXI.Graphics();
+      drawNeonShape(ng, SHAPES[newLevel], SHAPES[newLevel].radius, true);
+      ng.x = mx; ng.y = my;
+      shapesContainer.addChild(ng);
+      bodyGraphicsMap.set(newBody.id, ng);
     }
 
-    // 消除特效
     spawnMergeParticles(mx, my, level);
     playMergeSound(level);
-    // Screen shake（combo 越高震動越大）
     shakeAmount = 4 + level * 1.5 + comboCount * 0.5;
   }
 }
 
-// 浮動加分文字
+// ─── Floating text ───────────────────────────
 function spawnFloatingText(x, y, text, color, comboNum) {
+  const fontSize = comboNum ? (28 + comboNum * 4) : 22;
+  const t = new PIXI.Text({
+    text, style: {
+      fontFamily: 'Orbitron, sans-serif', fontSize, fontWeight: 'bold',
+      fill: color, align: 'center',
+    }
+  });
+  t.anchor.set(0.5);
+  t.x = x; t.y = y;
+  t.scale.set(0.5);
+  uiContainer.addChild(t);
   floatingTexts.push({
-    x, y,
-    text,
-    color,
-    life: 1,
-    decay: 0.018,
+    display: t, life: 1, decay: 0.018,
     vy: comboNum ? (-4.5 - comboNum * 0.3) : -2.5,
-    scale: 0.5,
-    isCombo: !!comboNum,
-    comboNum: comboNum || 0
+    targetScale: 1.2
   });
 }
 
-// 粒子系統
-// [修改4] 全新粒子系統：形狀碎片 + 光點 + 更大範圍
+// ─── Particle System ─────────────────────────
 function spawnMergeParticles(x, y, level) {
   const shape = SHAPES[level];
-  const color = shape.color;
+  const color = hexToNum(shape.color);
 
-  // 環形閃光 (glow ring) — 一個大的快速消散環
-  particles.push({
-    type: 'ring',
-    x, y,
-    radius: 5,
-    maxRadius: shape.radius * 3.5,
-    life: 1,
-    decay: 0.04,
-    color,
-    lineWidth: 4
-  });
+  // Ring
+  const ring = new PIXI.Graphics();
+  ring.x = x; ring.y = y;
+  particleContainer.addChild(ring);
+  particles.push({ type: 'ring', display: ring, radius: 5, maxRadius: shape.radius * 3.5, life: 1, decay: 0.04, color: shape.color, lineWidth: 4 });
 
-  // 形狀碎片粒子 — [修改4] 用原元素的縮小圖當成粒子碎片
+  // Shards
   const shardCount = 8 + level * 2;
   for (let i = 0; i < shardCount; i++) {
     const angle = (Math.PI * 2 * i) / shardCount + (Math.random() - 0.5) * 0.4;
     const speed = 3 + Math.random() * 6;
+    const g = new PIXI.Graphics();
+    const sc = 0.18 + Math.random() * 0.15;
+    drawNeonShape(g, shape, shape.radius, false);
+    g.x = x; g.y = y; g.scale.set(sc); g.rotation = Math.random() * Math.PI * 2;
+    particleContainer.addChild(g);
     particles.push({
-      type: 'shard',
-      x, y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed - 2,
-      life: 1,
-      decay: 0.012 + Math.random() * 0.015,
-      shapeLevel: level,
-      scale: 0.18 + Math.random() * 0.15,
-      rotation: Math.random() * Math.PI * 2,
-      rotSpeed: (Math.random() - 0.5) * 0.3,
-      color
+      type: 'shard', display: g, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 2,
+      life: 1, decay: 0.012 + Math.random() * 0.015, rotSpeed: (Math.random() - 0.5) * 0.3, initScale: sc
     });
   }
 
-  // 散射光點粒子
+  // Dots
   const dotCount = 16 + level * 3;
   for (let i = 0; i < dotCount; i++) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 2 + Math.random() * 7;
+    const sz = 2 + Math.random() * 5;
+    const g = new PIXI.Graphics();
+    g.circle(0, 0, sz).fill({ color });
+    g.x = x; g.y = y;
+    particleContainer.addChild(g);
     particles.push({
-      type: 'dot',
-      x, y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed - 2,
-      life: 1,
-      decay: 0.015 + Math.random() * 0.02,
-      size: 2 + Math.random() * 5,
-      color
+      type: 'dot', display: g, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 2,
+      life: 1, decay: 0.015 + Math.random() * 0.02
     });
   }
 }
 
 function updateParticles() {
-  // 更新粒子
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.life -= p.decay;
-    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    if (p.life <= 0) { particleContainer.removeChild(p.display); p.display.destroy(); particles.splice(i, 1); continue; }
     if (p.type === 'ring') {
       p.radius += (p.maxRadius - p.radius) * 0.15;
+      const g = p.display; g.clear();
+      g.circle(0, 0, p.radius).stroke({ color: hexToNum(p.color), width: p.lineWidth * p.life, alpha: p.life * 0.7 });
     } else {
-      p.x += p.vx;
-      p.y += p.vy;
-      if (p.vy !== undefined) p.vy += 0.08;
+      p.display.x += p.vx; p.display.y += p.vy;
+      p.vy += 0.08;
+      p.display.alpha = p.life;
       if (p.type === 'shard') {
-        p.rotation += p.rotSpeed;
+        p.display.rotation += p.rotSpeed;
+        p.display.scale.set(p.initScale * p.life);
       }
     }
   }
-  // 更新浮動文字
   for (let i = floatingTexts.length - 1; i >= 0; i--) {
     const ft = floatingTexts[i];
     ft.life -= ft.decay;
-    if (ft.life <= 0) { floatingTexts.splice(i, 1); continue; }
-    ft.y += ft.vy;
-    ft.vy *= 0.97; // 減速
-    ft.scale = Math.min(ft.scale + 0.08, 1.2); // 放大到 1.2
+    if (ft.life <= 0) { uiContainer.removeChild(ft.display); ft.display.destroy(); floatingTexts.splice(i, 1); continue; }
+    ft.display.y += ft.vy;
+    ft.vy *= 0.97;
+    ft.display.alpha = ft.life;
+    const s = Math.min(ft.display.scale.x + 0.08, ft.targetScale);
+    ft.display.scale.set(s);
   }
 }
 
-function drawParticles() {
-  for (const p of particles) {
-    if (p.type === 'ring') {
-      ctx.globalAlpha = p.life * 0.7;
-      ctx.shadowColor = p.color;
-      ctx.shadowBlur = 20;
-      ctx.strokeStyle = p.color;
-      ctx.lineWidth = p.lineWidth * p.life;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      ctx.stroke();
-    } else if (p.type === 'shard') {
-      // [修改4] 用原元素的縮小圖當粒子碎片
-      ctx.globalAlpha = p.life;
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.rotation);
-      ctx.scale(p.scale * p.life, p.scale * p.life);
+// ─── Draw static scenes ─────────────────────
+function drawBgScene() {
+  bgContainer.removeChildren();
+  const g = new PIXI.Graphics();
+  const lx = gameInsetX, rx = canvasW - gameInsetX;
 
-      const shape = SHAPES[p.shapeLevel];
-      ctx.shadowColor = p.color;
-      ctx.shadowBlur = 8;
-      ctx.strokeStyle = p.color;
-      ctx.lineWidth = 3 / (p.scale || 1);
-      ctx.fillStyle = hexToRGBA(p.color, 0.15);
+  // Game area bg
+  g.rect(lx, 0, rx - lx, gameAreaH).fill({ color: 0x0f0f23, alpha: 0.4 });
 
-      ctx.beginPath();
-      if (shape.sides === 0) {
-        ctx.arc(0, 0, shape.radius, 0, Math.PI * 2);
-      } else {
-        drawPolygonPath(ctx, 0, 0, shape.sides, shape.radius);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      // dot
-      ctx.globalAlpha = p.life;
-      ctx.shadowColor = p.color;
-      ctx.shadowBlur = 12;
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  // Vertical grid lines inside game area
+  const step = 45;
+  for (let x = lx + step; x < rx; x += step) {
+    g.moveTo(x, 0).lineTo(x, gameAreaH).stroke({ color: 0xffffff, width: 1, alpha: 0.025 });
   }
-  ctx.globalAlpha = 1;
-  ctx.shadowBlur = 0;
 
-  // 繪製浮動加分文字
-  for (const ft of floatingTexts) {
-    ctx.save();
-    ctx.globalAlpha = ft.life;
-    ctx.translate(ft.x, ft.y);
-    ctx.scale(ft.scale, ft.scale);
+  // 3D perspective floor
+  const farY = gameAreaH - 30, farL = lx, farR = rx;
+  const nearY = canvasH, nearL = -220, nearR = canvasW + 220;
+  const hLines = 8, vLines = 10;
 
-    const fontSize = ft.isCombo ? (28 + ft.comboNum * 4) : 22;
-    ctx.font = `bold ${fontSize}px Orbitron, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+  for (let i = 1; i <= hLines; i++) {
+    const t = i / hLines;
+    const tC = 1 - Math.pow(1 - t, 2.5);
+    const y = nearY + (farY - nearY) * tC;
+    const lineL = nearL + (farL - nearL) * tC;
+    const lineR = nearR + (farR - nearR) * tC;
+    const alpha = 0.5 + 0.5 * (1 - tC);
+    g.moveTo(lineL, y).lineTo(lineR, y).stroke({ color: 0x00ffff, width: 1, alpha });
+  }
 
-    // 發光效果
-    ctx.shadowColor = ft.color;
-    ctx.shadowBlur = 20;
-    ctx.fillStyle = ft.color;
-    ctx.fillText(ft.text, 0, 0);
-    // 再畫一次加強發光
-    ctx.shadowBlur = 40;
-    ctx.fillText(ft.text, 0, 0);
+  for (let i = 0; i <= vLines; i++) {
+    const frac = i / vLines;
+    const xNear = nearL + (nearR - nearL) * frac;
+    const xFar = farL + (farR - farL) * frac;
+    const alpha = 0.35 + 0.35 * (1 - Math.abs(frac - 0.5) * 2);
+    g.moveTo(xNear, nearY).lineTo(xFar, farY).stroke({ color: 0x00ffff, width: 1, alpha: alpha * 0.9 });
+  }
 
-    ctx.restore();
+  bgContainer.addChild(g);
+}
+
+function drawWallGlow() {
+  wallGlowContainer.removeChildren();
+  const g = new PIXI.Graphics();
+  const lx = gameInsetX, rx = canvasW - gameInsetX;
+
+  // Left/Right wall glow lines
+  g.moveTo(lx, 0).lineTo(lx, gameAreaH).stroke({ color: 0x00ffff, width: 2, alpha: 0.6 });
+  g.moveTo(rx, 0).lineTo(rx, gameAreaH).stroke({ color: 0x00ffff, width: 2, alpha: 0.6 });
+  // Bottom floor line
+  g.moveTo(lx, gameAreaH).lineTo(rx, gameAreaH).stroke({ color: 0x00ffff, width: 2.5, alpha: 0.7 });
+
+  wallGlowContainer.addChild(g);
+}
+
+function drawGameOverLine() {
+  gameOverLineGfx.clear();
+  // Dashed line simulation with small segments
+  const lx = gameInsetX, rx = canvasW - gameInsetX;
+  let x = lx;
+  while (x < rx) {
+    const end = Math.min(x + 8, rx);
+    gameOverLineGfx.moveTo(x, gameOverLineY).lineTo(end, gameOverLineY)
+      .stroke({ color: 0xff3131, width: 1.5, alpha: 0.35 });
+    x += 14;
   }
 }
 
-// ─── Drawing ─────────────────────────────────
-function gameLoop() {
-  update();
-  draw();
-  requestAnimationFrame(gameLoop);
+// ─── Aim Guide ───────────────────────────────
+function drawAimGuide() {
+  aimGuideContainer.removeChildren();
+  if (!canDrop || isGameOver) return;
+  const shape = SHAPES[currentLevel];
+  const r = shape.radius;
+  const x = Math.max(gameInsetX + r + 4, Math.min(canvasW - gameInsetX - r - 4, dropX));
+
+  const g = new PIXI.Graphics();
+  // Dashed vertical line
+  let cy = r + 4;
+  while (cy < gameAreaH) {
+    const end = Math.min(cy + 4, gameAreaH);
+    g.moveTo(x, cy).lineTo(x, end).stroke({ color: 0xffffff, width: 1, alpha: 0.12 });
+    cy += 10;
+  }
+  aimGuideContainer.addChild(g);
+
+  // Preview shape ghost
+  const ghost = new PIXI.Graphics();
+  drawNeonShape(ghost, shape, r, false);
+  ghost.x = x; ghost.y = r + 8;
+  ghost.alpha = 0.55;
+  aimGuideContainer.addChild(ghost);
 }
 
-// === 電子流動系統 ===
+// ─── Grid Flows (animated) ───────────────────
+let gridFlowGfx = null;
 function spawnGridFlow() {
   const isH = Math.random() < 0.6;
   gridFlows.push({
-    t: 0,
-    speed: 0.003 + Math.random() * 0.005,
-    lineIdx: isH
-      ? Math.floor(Math.random() * 8) + 1
-      : Math.floor(Math.random() * 11),
-    isHorizontal: isH,
-    size: 2 + Math.random() * 2,
-    brightness: 0.6 + Math.random() * 0.4
+    t: Math.random() * 0.2, speed: 0.001 + Math.random() * 0.002,
+    lineIdx: isH ? Math.floor(Math.random() * 8) + 1 : Math.floor(Math.random() * 11),
+    isHorizontal: isH, size: 2.5 + Math.random() * 4.5, brightness: 0.7 + Math.random() * 0.3
   });
 }
 
 function updateGridFlows() {
-  if (gridFlows.length < 25 && Math.random() < 0.12) {
-    spawnGridFlow();
-  }
+  if (gridFlows.length < 20 && Math.random() < 0.06) spawnGridFlow();
   for (let i = gridFlows.length - 1; i >= 0; i--) {
-    const f = gridFlows[i];
-    f.t += f.speed;
-    if (f.t > 1) gridFlows.splice(i, 1);
+    gridFlows[i].t += gridFlows[i].speed;
+    if (gridFlows[i].t > 1) gridFlows.splice(i, 1);
   }
 }
 
-function drawGridFlows(farY, farL, farR, nearY, nearL, nearR, hLineCount, vLineCount) {
+function drawGridFlowsPixi() {
+  if (!gridFlowGfx) { gridFlowGfx = new PIXI.Graphics(); bgContainer.addChild(gridFlowGfx); }
+  gridFlowGfx.clear();
+
+  const lx = gameInsetX, rx = canvasW - gameInsetX;
+  const farY = gameAreaH - 30, farL = lx, farR = rx;
+  const nearY = canvasH, nearL = -220, nearR = canvasW + 220;
+  const hLines = 8, vLines = 10;
+
   for (const f of gridFlows) {
     let px, py;
-
     if (f.isHorizontal) {
-      const t = f.lineIdx / hLineCount;
-      const tCurve = 1 - Math.pow(1 - t, 2.5);
-      const lineY = nearY + (farY - nearY) * tCurve;
-      const lineL = nearL + (farL - nearL) * tCurve;
-      const lineR = nearR + (farR - nearR) * tCurve;
-      px = lineL + (lineR - lineL) * f.t;
-      py = lineY;
+      const t = f.lineIdx / hLines;
+      const tC = 1 - Math.pow(1 - t, 2.5);
+      const lineY = nearY + (farY - nearY) * tC;
+      const lineL = nearL + (farL - nearL) * tC;
+      const lineR = nearR + (farR - nearR) * tC;
+      px = lineL + (lineR - lineL) * f.t; py = lineY;
     } else {
-      const frac = f.lineIdx / vLineCount;
+      const frac = f.lineIdx / vLines;
       const xNear = nearL + (nearR - nearL) * frac;
       const xFar = farL + (farR - farL) * frac;
       px = xNear + (xFar - xNear) * f.t;
       py = nearY + (farY - nearY) * f.t;
     }
-
-    // 亮度：中間最亮，兩端淡出
-    const alpha = f.brightness * Math.max(0, 1 - Math.abs(f.t - 0.5) * 2.2);
+    const flicker = 0.6 + 0.4 * Math.sin(f.t * 40 + f.lineIdx * 7);
+    const alpha = f.brightness * Math.max(0, 1 - Math.abs(f.t - 0.5) * 2.2) * flicker;
     if (alpha <= 0) continue;
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-
-    // 光暈
-    const glow = ctx.createRadialGradient(px, py, 0, px, py, f.size * 8);
-    glow.addColorStop(0, 'rgba(0,255,255,0.7)');
-    glow.addColorStop(0.3, 'rgba(0,255,255,0.2)');
-    glow.addColorStop(1, 'rgba(0,255,255,0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(px - f.size * 8, py - f.size * 8, f.size * 16, f.size * 16);
-
-    // 中心亮點
-    ctx.shadowColor = '#00ffff';
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(px, py, f.size * 0.7, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
+    // Radial gradient glow: multiple concentric circles, center=opaque, edge=transparent
+    const layers = 6;
+    const maxR = f.size * 3;
+    for (let l = layers - 1; l >= 0; l--) {
+      const frac = l / (layers - 1); // 0=center, 1=edge
+      const r = maxR * (0.1 + 0.9 * frac);
+      const layerAlpha = alpha * (1 - frac * 0.85);
+      const color = frac < 0.3 ? 0xffffff : 0x00ffff;
+      gridFlowGfx.circle(px, py, r).fill({ color, alpha: layerAlpha * (frac < 0.3 ? 1 : 0.5) });
+    }
   }
 }
 
-function update() {
+// ─── Game Loop ───────────────────────────────
+function gameLoop() {
   updateParticles();
   updateGridFlows();
+  drawGridFlowsPixi();
   checkGameOver();
 
-  // Screen shake decay
   if (shakeAmount > 0) {
+    app.stage.x = (Math.random() - 0.5) * shakeAmount * 2;
+    app.stage.y = (Math.random() - 0.5) * shakeAmount * 2;
     shakeAmount *= 0.85;
-    if (shakeAmount < 0.3) shakeAmount = 0;
-  }
-}
-
-function draw() {
-  ctx.save();
-
-  // Screen shake offset
-  if (shakeAmount > 0) {
-    const sx = (Math.random() - 0.5) * shakeAmount * 2;
-    const sy = (Math.random() - 0.5) * shakeAmount * 2;
-    ctx.translate(sx, sy);
+    if (shakeAmount < 0.3) { shakeAmount = 0; app.stage.x = 0; app.stage.y = 0; }
   }
 
-  // Clear
-  ctx.clearRect(-10, -10, canvasW + 20, canvasH + 20);
-
-  // Background grid
-  drawGrid();
-
-  // Container walls glow
-  drawContainerGlow();
-
-  // Game over line
-  drawGameOverLine();
-
-  // Shapes
-  drawShapes();
-
-  // Particles (on top)
-  drawParticles();
-
-  // Aim guide
-  if (canDrop && !isGameOver) {
-    drawAimGuide();
-  }
-
-  ctx.restore();
-}
-
-function drawGrid() {
-  const floorTop = gameAreaH;
-  const lx = gameInsetX;
-  const rx = canvasW - gameInsetX;
-
-  // === 遊戲區背板 ===
-  const bgGrad = ctx.createLinearGradient(0, 0, 0, gameAreaH);
-  bgGrad.addColorStop(0, 'rgba(15,15,35,0.4)');
-  bgGrad.addColorStop(0.8, 'rgba(8,12,25,0.5)');
-  bgGrad.addColorStop(1, 'rgba(0,8,18,0.6)');
-  ctx.fillStyle = bgGrad;
-  ctx.fillRect(lx, 0, rx - lx, gameAreaH);
-
-  // === 遊戲區內部暗紋垂直線 ===
-  ctx.strokeStyle = 'rgba(255,255,255,0.025)';
-  ctx.lineWidth = 1;
-  const step = 45;
-  for (let x = lx + step; x < rx; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, floorTop);
-    ctx.stroke();
-  }
-
-  // === 底部 3D 透視地板 ===
-  // 遠端深入遊戲區 40px，讓圖形像站在地板上
-  const farY = floorTop - 40;
-  const farL = lx;
-  const farR = rx;
-  // 近端超出畫面左右各 50px，讓地板更寬廣
-  const nearY = canvasH;
-  const nearL = -50;
-  const nearR = canvasW + 50;
-
-  // 水平線：近端(底)疏、遠端(頂)密
-  const hLines = 8;
-  for (let i = 1; i <= hLines; i++) {
-    const t = i / hLines;
-    // 1-(1-t)^2.5 讓近端間距大、遠端間距小
-    const tCurve = 1 - Math.pow(1 - t, 2.5);
-    const y = nearY + (farY - nearY) * tCurve;
-    const lineL = nearL + (farL - nearL) * tCurve;
-    const lineR = nearR + (farR - nearR) * tCurve;
-    ctx.globalAlpha = 0.5 + 0.5 * (1 - tCurve);
-    ctx.strokeStyle = 'rgba(0,255,255,1.0)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(lineL, y);
-    ctx.lineTo(lineR, y);
-    ctx.stroke();
-  }
-
-  // 垂直線：底邊均分的點連到遠端對應的點
-  const vLines = 10;
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= vLines; i++) {
-    const frac = i / vLines;
-    const xNear = nearL + (nearR - nearL) * frac;
-    const xFar = farL + (farR - farL) * frac;
-    ctx.globalAlpha = 0.35 + 0.35 * (1 - Math.abs(frac - 0.5) * 2);
-    ctx.strokeStyle = 'rgba(0,255,255,0.9)';
-    ctx.beginPath();
-    ctx.moveTo(xNear, nearY);
-    ctx.lineTo(xFar, farY);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-
-  // === 電子流動特效 ===
-  drawGridFlows(farY, farL, farR, nearY, nearL, nearR, hLines, vLines);
-}
-
-function drawContainerGlow() {
-  const lx = gameInsetX;
-  const rx = canvasW - gameInsetX;
-  const depthW = 15;
-
-  // === 左側 3D 深度面 ===
-  const leftGrad = ctx.createLinearGradient(lx, 0, lx + depthW, 0);
-  leftGrad.addColorStop(0, 'rgba(0,255,255,0.15)');
-  leftGrad.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = leftGrad;
-  ctx.fillRect(lx, 0, depthW, gameAreaH);
-
-  // 左邊緣發光線
-  ctx.shadowColor = '#00ffff';
-  ctx.shadowBlur = 10;
-  ctx.strokeStyle = 'rgba(0,255,255,0.6)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(lx, 0);
-  ctx.lineTo(lx, gameAreaH);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // === 右側 3D 深度面 ===
-  const rightGrad = ctx.createLinearGradient(rx, 0, rx - depthW, 0);
-  rightGrad.addColorStop(0, 'rgba(0,255,255,0.15)');
-  rightGrad.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = rightGrad;
-  ctx.fillRect(rx - depthW, 0, depthW, gameAreaH);
-
-  // 右邊緣發光線
-  ctx.shadowColor = '#00ffff';
-  ctx.shadowBlur = 10;
-  ctx.strokeStyle = 'rgba(0,255,255,0.6)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(rx, 0);
-  ctx.lineTo(rx, gameAreaH);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // === 底部發光地板線 (遊戲區底邊) ===
-  ctx.shadowColor = '#00ffff';
-  ctx.shadowBlur = 18;
-  ctx.strokeStyle = 'rgba(0,255,255,0.7)';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.moveTo(lx, gameAreaH);
-  ctx.lineTo(rx, gameAreaH);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-}
-
-function drawGameOverLine() {
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,49,49,0.35)';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([8, 6]);
-  ctx.beginPath();
-  ctx.moveTo(gameInsetX, gameOverLineY);
-  ctx.lineTo(canvasW - gameInsetX, gameOverLineY);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.restore();
-}
-
-function drawAimGuide() {
-  const shape = SHAPES[currentLevel];
-  const r = shape.radius;
-  const x = Math.max(gameInsetX + r + 4, Math.min(canvasW - gameInsetX - r - 4, dropX));
-
-  // Vertical dashed line
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4, 6]);
-  ctx.beginPath();
-  ctx.moveTo(x, r + 4);
-  ctx.lineTo(x, gameAreaH);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.restore();
-
-  // Preview shape ghost
-  ctx.globalAlpha = 0.55;
-  drawSingleShape(x, r + 8, currentLevel);
-  ctx.globalAlpha = 1;
-}
-
-function drawShapes() {
+  // Sync Matter.js body positions to PixiJS Graphics
   const bodies = Composite.allBodies(engine.world);
   for (const body of bodies) {
-    const level = bodyLevelMap.get(body.id);
-    if (level === undefined) continue;
-    drawSingleShape(body.position.x, body.position.y, level, body.angle);
+    const g = bodyGraphicsMap.get(body.id);
+    if (g) { g.x = body.position.x; g.y = body.position.y; g.rotation = body.angle; }
   }
-}
 
-// [修改2] 線條加粗 — lineWidth 從 2.5 提升至 4，內部線也加粗
-function drawSingleShape(x, y, level, angle = 0) {
-  const shape = SHAPES[level];
-  const r = shape.radius;
-  const color = shape.color;
-
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-
-  // Neon glow — 厚實線條 + 強發光
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 28;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 6;
-  ctx.fillStyle = hexToRGBA(color, 0.08);
-
-  ctx.beginPath();
-  if (shape.sides === 0) {
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-  } else {
-    drawPolygonPath(ctx, 0, 0, shape.sides, r);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Inner lighter stroke for depth
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = hexToRGBA(color, 0.2);
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  if (shape.sides === 0) {
-    ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2);
-  } else {
-    drawPolygonPath(ctx, 0, 0, shape.sides, r * 0.55);
-  }
-  ctx.closePath();
-  ctx.stroke();
-
-  ctx.restore();
-}
-
-function drawPolygonPath(ctx, cx, cy, sides, r) {
-  for (let i = 0; i < sides; i++) {
-    const a = (Math.PI * 2 * i) / sides - Math.PI / 2;
-    const px = cx + r * Math.cos(a);
-    const py = cy + r * Math.sin(a);
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
-  }
+  drawAimGuide();
 }
 
 // ─── Next Shape Preview ──────────────────────
 function drawNextPreview() {
-  const c = document.getElementById('next-canvas');
-  const cx = c.getContext('2d');
-  cx.clearRect(0, 0, c.width, c.height);
-
+  if (!nextApp) return;
+  nextApp.stage.removeChildren();
   const shape = SHAPES[nextLevel];
-  const scale = 22 / shape.radius;
-
-  cx.save();
-  cx.translate(c.width / 2, c.height / 2);
-  cx.scale(scale, scale);
-
-  cx.shadowColor = shape.color;
-  cx.shadowBlur = 12;
-  cx.strokeStyle = shape.color;
-  cx.lineWidth = 4 / scale;
-  cx.fillStyle = hexToRGBA(shape.color, 0.15);
-
-  cx.beginPath();
-  if (shape.sides === 0) {
-    cx.arc(0, 0, shape.radius, 0, Math.PI * 2);
-  } else {
-    drawPolygonPath(cx, 0, 0, shape.sides, shape.radius);
-  }
-  cx.closePath();
-  cx.fill();
-  cx.stroke();
-
-  cx.restore();
+  const scale = 28 / shape.radius;
+  const g = new PIXI.Graphics();
+  drawNeonShape(g, shape, shape.radius, true);
+  g.x = 40; g.y = 40;
+  g.scale.set(scale);
+  nextApp.stage.addChild(g);
 }
 
 // ─── Evolution Bar ───────────────────────────
 function drawEvolutionBar() {
-  const c = document.getElementById('evo-canvas');
-  if (!c) return;
-  const cx = c.getContext('2d');
-  const w = c.width;
-  const h = c.height;
-  cx.clearRect(0, 0, w, h);
-
+  if (!evoApp) return;
+  evoApp.stage.removeChildren();
   const count = SHAPES.length;
-  const spacing = w / count;
+  const evoEl = document.getElementById('evo-container');
+  const w = evoEl ? evoEl.getBoundingClientRect().width : 500;
+  const h = 80;
+  const minR = 11, maxR = 34;
 
+  // Step 1: Calculate each shape's display radius (small → large)
+  const radii = [];
+  for (let i = 0; i < count; i++) {
+    radii.push(minR + (maxR - minR) * (i / (count - 1)));
+  }
+
+  // Step 2: Each shape's slot width = its display diameter (2*r)
+  const diameters = radii.map(r => r * 2);
+  const totalDiameters = diameters.reduce((sum, d) => sum + d, 0);
+
+  // Step 3: Scale slots to fit available width
+  const slotScale = w / totalDiameters;
+
+  // Step 4: Place each shape centered in its slot
+  let curX = 20;
   for (let i = 0; i < count; i++) {
     const shape = SHAPES[i];
-    const x = spacing * i + spacing / 2;
-    const y = h / 2;
-    const r = 9 + i * 1.3;
-    const scale = r / shape.radius;
-
-    cx.save();
-    cx.translate(x, y);
-    cx.scale(scale, scale);
-    cx.shadowColor = shape.color;
-    cx.shadowBlur = 8;
-    cx.strokeStyle = shape.color;
-    cx.lineWidth = 3.5 / scale;
-    cx.fillStyle = hexToRGBA(shape.color, 0.1);
-
-    cx.beginPath();
-    if (shape.sides === 0) {
-      cx.arc(0, 0, shape.radius, 0, Math.PI * 2);
-    } else {
-      drawPolygonPath(cx, 0, 0, shape.sides, shape.radius);
-    }
-    cx.closePath();
-    cx.fill();
-    cx.stroke();
-    cx.restore();
-
-    // Arrow
-    if (i < count - 1) {
-      cx.fillStyle = 'rgba(255,255,255,0.15)';
-      cx.font = '10px Rajdhani';
-      cx.textAlign = 'center';
-      cx.fillText('›', x + spacing / 2, y + 4);
-    }
+    const displayR = radii[i];
+    const slotW = diameters[i] * slotScale;
+    const x = curX + slotW / 2;  // center of this slot
+    const y = h / 2;              // vertical center
+    const scale = displayR / shape.radius;
+    const g = new PIXI.Graphics();
+    drawNeonShape(g, shape, shape.radius, true);
+    g.x = x; g.y = y;
+    g.scale.set(scale);
+    evoApp.stage.addChild(g);
+    curX += slotW;
   }
 }
 
 // ─── Game Over ───────────────────────────────
 function checkGameOver() {
   if (isGameOver) return;
-
   const bodies = Composite.allBodies(engine.world);
   let aboveLine = false;
   for (const body of bodies) {
-    if (bodyLevelMap.has(body.id)) {
-      if (body.position.y < gameOverLineY && body.speed < 1.5) {
-        aboveLine = true;
-        break;
-      }
-    }
+    if (bodyLevelMap.has(body.id) && body.position.y < gameOverLineY && body.speed < 1.5) { aboveLine = true; break; }
   }
-
   if (aboveLine) {
-    if (!gameOverTimer) {
-      gameOverTimer = setTimeout(() => {
-        triggerGameOver();
-      }, 1500);
-    }
+    if (!gameOverTimer) gameOverTimer = setTimeout(() => triggerGameOver(), 1500);
   } else {
-    if (gameOverTimer) {
-      clearTimeout(gameOverTimer);
-      gameOverTimer = null;
-    }
+    if (gameOverTimer) { clearTimeout(gameOverTimer); gameOverTimer = null; }
   }
 }
 
 function triggerGameOver() {
   isGameOver = true;
-  if (score > highScore) {
-    highScore = score;
-    localStorage.setItem('neonMergeHigh', highScore.toString());
-  }
+  if (score > highScore) { highScore = score; localStorage.setItem('neonMergeHigh', highScore.toString()); }
   document.getElementById('final-score').textContent = score;
   document.getElementById('high-score').textContent = highScore;
   document.getElementById('game-over').classList.remove('hidden');
-
-  // 提交分數到後端
-  const playTimeMs = Date.now() - gameStartTime;
-  const playTimeSec = Math.round(playTimeMs / 1000);
+  const playTimeSec = Math.round((Date.now() - gameStartTime) / 1000);
   submitScore(playerId, score, currentDifficulty, playTimeSec);
 }
 
 function restart() {
-  // 顯示難度選單，讓玩家重新選擇
   document.getElementById('game-over').classList.add('hidden');
   document.getElementById('difficulty-select').classList.remove('hidden');
 }
 
 // ─── Input ───────────────────────────────────
-function onPointerMove(e) {
-  const rect = canvas.getBoundingClientRect();
-  dropX = e.clientX - rect.left;
+function getCanvasX(clientX) {
+  const rect = app.canvas.getBoundingClientRect();
+  return (clientX - rect.left) * (canvasW / rect.width);
 }
-
+function onPointerMove(e) { dropX = getCanvasX(e.clientX); }
 function onPointerDown(e) {
-  const rect = canvas.getBoundingClientRect();
-  dropX = e.clientX - rect.left;
+  dropX = getCanvasX(e.clientX);
   const shape = SHAPES[currentLevel];
-  const x = Math.max(shape.radius + 4, Math.min(canvasW - shape.radius - 4, dropX));
-  dropShape(x);
+  dropShape(Math.max(shape.radius + 4, Math.min(canvasW - shape.radius - 4, dropX)));
 }
-
-function onTouchMove(e) {
-  e.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  dropX = e.touches[0].clientX - rect.left;
-}
-
+function onTouchMove(e) { e.preventDefault(); dropX = getCanvasX(e.touches[0].clientX); }
 function onTouchStart(e) {
-  e.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  dropX = e.touches[0].clientX - rect.left;
+  e.preventDefault(); dropX = getCanvasX(e.touches[0].clientX);
   const shape = SHAPES[currentLevel];
-  const x = Math.max(shape.radius + 4, Math.min(canvasW - shape.radius - 4, dropX));
-  dropShape(x);
+  dropShape(Math.max(shape.radius + 4, Math.min(canvasW - shape.radius - 4, dropX)));
 }
 
 // ─── Audio ───────────────────────────────────
 function ensureAudioCtx() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 }
 
 function playDropSound() {
@@ -1086,607 +786,350 @@ function playDropSound() {
   gain.gain.setValueAtTime(0.15, t);
   gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
   osc.connect(gain).connect(audioCtx.destination);
-  osc.start(t);
-  osc.stop(t + 0.12);
+  osc.start(t); osc.stop(t + 0.12);
 }
 
-// ─── 音效調度 ─────────────────────────────────
 function playMergeSound(level) {
   const handlers = {
-    standard:  playMergeSoundStandard,
-    crystal:   playMergeSoundCrystal,
-    waterdrop: playMergeSoundWaterDrop,
-    bomb:      playMergeSoundBomb,
-    stone:     playMergeSoundStone,
-    cosmic:    playMergeSoundCosmic,
+    standard: playMergeSoundStandard, crystal: playMergeSoundCrystal,
+    waterdrop: playMergeSoundWaterDrop, bomb: playMergeSoundBomb,
+    stone: playMergeSoundStone, cosmic: playMergeSoundCosmic
   };
   (handlers[currentSoundType] || playMergeSoundStandard)(level);
 }
 
-// 標準音效 — 爆破衝擊感
 function playMergeSoundStandard(level) {
-  ensureAudioCtx();
-  const t = audioCtx.currentTime;
-  const intensity = 0.7 + level * 0.1;
-
+  ensureAudioCtx(); const t = audioCtx.currentTime; const intensity = 0.7 + level * 0.1;
   const comp = audioCtx.createDynamicsCompressor();
-  comp.threshold.setValueAtTime(-20, t);
-  comp.knee.setValueAtTime(10, t);
-  comp.ratio.setValueAtTime(12, t);
-  comp.attack.setValueAtTime(0, t);
-  comp.release.setValueAtTime(0.1, t);
-  comp.connect(audioCtx.destination);
-
-  // 1. 爆破白噪 (主體衝擊)
+  comp.threshold.setValueAtTime(-20, t); comp.knee.setValueAtTime(10, t);
+  comp.ratio.setValueAtTime(12, t); comp.attack.setValueAtTime(0, t);
+  comp.release.setValueAtTime(0.1, t); comp.connect(audioCtx.destination);
   const noiseDur = 0.3 + level * 0.03;
   const bufSz = Math.floor(audioCtx.sampleRate * noiseDur);
   const nBuf = audioCtx.createBuffer(1, bufSz, audioCtx.sampleRate);
   const nData = nBuf.getChannelData(0);
-  for (let i = 0; i < bufSz; i++) {
-    nData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSz, 2);
-  }
-  const nSrc = audioCtx.createBufferSource();
-  nSrc.buffer = nBuf;
+  for (let i = 0; i < bufSz; i++) nData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSz, 2);
+  const nSrc = audioCtx.createBufferSource(); nSrc.buffer = nBuf;
   const nGain = audioCtx.createGain();
   nGain.gain.setValueAtTime(0.5 * intensity, t);
   nGain.gain.exponentialRampToValueAtTime(0.001, t + noiseDur);
-  const lpf = audioCtx.createBiquadFilter();
-  lpf.type = 'lowpass';
+  const lpf = audioCtx.createBiquadFilter(); lpf.type = 'lowpass';
   lpf.frequency.setValueAtTime(3000 + level * 400, t);
   lpf.frequency.exponentialRampToValueAtTime(300, t + noiseDur);
-  nSrc.connect(lpf).connect(nGain).connect(comp);
-  nSrc.start(t);
-  nSrc.stop(t + noiseDur);
-
-  // 2. 低頻重擊 (衝擊波)
-  const subO = audioCtx.createOscillator();
-  const subG = audioCtx.createGain();
-  subO.type = 'sine';
-  subO.frequency.setValueAtTime(100, t);
+  nSrc.connect(lpf).connect(nGain).connect(comp); nSrc.start(t); nSrc.stop(t + noiseDur);
+  const subO = audioCtx.createOscillator(); const subG = audioCtx.createGain();
+  subO.type = 'sine'; subO.frequency.setValueAtTime(100, t);
   subO.frequency.exponentialRampToValueAtTime(20, t + 0.3);
   subG.gain.setValueAtTime(0.6 * intensity, t);
   subG.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
-  subO.connect(subG).connect(comp);
-  subO.start(t);
-  subO.stop(t + 0.35);
-
-  // 3. 金屬撞擊 (碎裂)
-  const mFreq = 800 + level * 150;
-  const mO = audioCtx.createOscillator();
-  const mG = audioCtx.createGain();
-  mO.type = 'square';
+  subO.connect(subG).connect(comp); subO.start(t); subO.stop(t + 0.35);
+  const mFreq = 800 + level * 150; const mO = audioCtx.createOscillator();
+  const mG = audioCtx.createGain(); mO.type = 'square';
   mO.frequency.setValueAtTime(mFreq, t);
   mO.frequency.exponentialRampToValueAtTime(mFreq * 0.3, t + 0.08);
   mG.gain.setValueAtTime(0.2 * intensity, t);
   mG.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
-  const hpf = audioCtx.createBiquadFilter();
-  hpf.type = 'highpass';
-  hpf.frequency.value = 600;
-  mO.connect(hpf).connect(mG).connect(comp);
-  mO.start(t);
-  mO.stop(t + 0.1);
-
-  // 4. 升調回饋 (成功感)
-  const rFreq = 300 + level * 80;
-  const rO = audioCtx.createOscillator();
-  const rG = audioCtx.createGain();
-  rO.type = 'sine';
+  const hpf = audioCtx.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 600;
+  mO.connect(hpf).connect(mG).connect(comp); mO.start(t); mO.stop(t + 0.1);
+  const rFreq = 300 + level * 80; const rO = audioCtx.createOscillator();
+  const rG = audioCtx.createGain(); rO.type = 'sine';
   rO.frequency.setValueAtTime(rFreq, t + 0.05);
   rO.frequency.exponentialRampToValueAtTime(rFreq * 3, t + 0.4);
   rG.gain.setValueAtTime(0.001, t);
   rG.gain.linearRampToValueAtTime(0.15 * intensity, t + 0.08);
   rG.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
-  rO.connect(rG).connect(comp);
-  rO.start(t);
-  rO.stop(t + 0.45);
+  rO.connect(rG).connect(comp); rO.start(t); rO.stop(t + 0.45);
 }
 
-// 水晶音效 — 堅硬物體碰撞 / 陶瓷質感 + ASMR
 function playMergeSoundCrystal(level) {
-  ensureAudioCtx();
-  const t = audioCtx.currentTime;
-  const intensity = 0.6 + level * 0.08;
-
+  ensureAudioCtx(); const t = audioCtx.currentTime; const intensity = 0.6 + level * 0.08;
   const comp = audioCtx.createDynamicsCompressor();
-  comp.threshold.setValueAtTime(-12, t);
-  comp.knee.setValueAtTime(4, t);
-  comp.ratio.setValueAtTime(6, t);
-  comp.attack.setValueAtTime(0.001, t);
-  comp.release.setValueAtTime(0.15, t);
-  comp.connect(audioCtx.destination);
-
-  // 1. 瞬態衝擊 (極短高頻噪聲 click)
+  comp.threshold.setValueAtTime(-12, t); comp.knee.setValueAtTime(4, t);
+  comp.ratio.setValueAtTime(6, t); comp.attack.setValueAtTime(0.001, t);
+  comp.release.setValueAtTime(0.15, t); comp.connect(audioCtx.destination);
   const clickDur = 0.012;
   const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
   const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
   const clickData = clickBuf.getChannelData(0);
-  for (let i = 0; i < clickSz; i++) {
-    clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 8);
-  }
-  const clickSrc = audioCtx.createBufferSource();
-  clickSrc.buffer = clickBuf;
+  for (let i = 0; i < clickSz; i++) clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 8);
+  const clickSrc = audioCtx.createBufferSource(); clickSrc.buffer = clickBuf;
   const clickGain = audioCtx.createGain();
   clickGain.gain.setValueAtTime(0.7 * intensity, t);
   clickGain.gain.exponentialRampToValueAtTime(0.001, t + clickDur);
-  const clickHPF = audioCtx.createBiquadFilter();
-  clickHPF.type = 'highpass';
-  clickHPF.frequency.setValueAtTime(2000, t);
-  clickHPF.Q.setValueAtTime(1.5, t);
+  const clickHPF = audioCtx.createBiquadFilter(); clickHPF.type = 'highpass';
+  clickHPF.frequency.setValueAtTime(2000, t); clickHPF.Q.setValueAtTime(1.5, t);
   clickSrc.connect(clickHPF).connect(clickGain).connect(comp);
-  clickSrc.start(t);
-  clickSrc.stop(t + clickDur);
-
-  // 2. 水晶撞擊音 (高頻正弦 ping)
-  const pingFreq = 3200 - level * 180;
-  const pingDur = 0.15 + level * 0.025;
-  const pingO = audioCtx.createOscillator();
-  const pingG = audioCtx.createGain();
-  pingO.type = 'sine';
-  pingO.frequency.setValueAtTime(pingFreq, t);
+  clickSrc.start(t); clickSrc.stop(t + clickDur);
+  const pingFreq = 3200 - level * 180; const pingDur = 0.15 + level * 0.025;
+  const pingO = audioCtx.createOscillator(); const pingG = audioCtx.createGain();
+  pingO.type = 'sine'; pingO.frequency.setValueAtTime(pingFreq, t);
   pingO.frequency.exponentialRampToValueAtTime(pingFreq * 0.7, t + pingDur);
   pingG.gain.setValueAtTime(0.35 * intensity, t);
   pingG.gain.setValueAtTime(0.35 * intensity, t + 0.003);
   pingG.gain.exponentialRampToValueAtTime(0.001, t + pingDur);
-  const pingBPF = audioCtx.createBiquadFilter();
-  pingBPF.type = 'bandpass';
-  pingBPF.frequency.setValueAtTime(pingFreq, t);
-  pingBPF.Q.setValueAtTime(3, t);
-  pingO.connect(pingBPF).connect(pingG).connect(comp);
-  pingO.start(t);
-  pingO.stop(t + pingDur);
-
-  // 3. 金屬共鳴泛音 (雙頻三角波)
-  const resDur = 0.25 + level * 0.04;
-  const resBase = 1800 - level * 100;
-  const detune = 12 + level * 3;
+  const pingBPF = audioCtx.createBiquadFilter(); pingBPF.type = 'bandpass';
+  pingBPF.frequency.setValueAtTime(pingFreq, t); pingBPF.Q.setValueAtTime(3, t);
+  pingO.connect(pingBPF).connect(pingG).connect(comp); pingO.start(t); pingO.stop(t + pingDur);
+  const resDur = 0.25 + level * 0.04; const resBase = 1800 - level * 100; const detune = 12 + level * 3;
   for (let d = 0; d < 2; d++) {
-    const resO = audioCtx.createOscillator();
-    const resG = audioCtx.createGain();
+    const resO = audioCtx.createOscillator(); const resG = audioCtx.createGain();
     resO.type = 'triangle';
     resO.frequency.setValueAtTime(resBase + (d === 0 ? detune : -detune), t);
     resG.gain.setValueAtTime(0.12 * intensity, t + 0.002);
     resG.gain.exponentialRampToValueAtTime(0.001, t + resDur);
-    resO.connect(resG).connect(comp);
-    resO.start(t);
-    resO.stop(t + resDur);
+    resO.connect(resG).connect(comp); resO.start(t); resO.stop(t + resDur);
   }
-
-  // 4. 高頻泛音 shimmer (ASMR 尾韻)
-  const shimFreq = 5000 + level * 300;
-  const shimDur = 0.4 + level * 0.05;
-  const shimO = audioCtx.createOscillator();
-  const shimG = audioCtx.createGain();
-  shimO.type = 'sine';
-  shimO.frequency.setValueAtTime(shimFreq, t + 0.01);
+  const shimFreq = 5000 + level * 300; const shimDur = 0.4 + level * 0.05;
+  const shimO = audioCtx.createOscillator(); const shimG = audioCtx.createGain();
+  shimO.type = 'sine'; shimO.frequency.setValueAtTime(shimFreq, t + 0.01);
   shimO.frequency.exponentialRampToValueAtTime(shimFreq * 0.5, t + shimDur);
   shimG.gain.setValueAtTime(0.001, t);
   shimG.gain.linearRampToValueAtTime(0.06 * intensity, t + 0.02);
   shimG.gain.exponentialRampToValueAtTime(0.001, t + shimDur);
-  shimO.connect(shimG).connect(comp);
-  shimO.start(t);
-  shimO.stop(t + shimDur);
-
-  // 5. 短促低頻撞擊體感 (輕微)
-  const thudO = audioCtx.createOscillator();
-  const thudG = audioCtx.createGain();
-  thudO.type = 'sine';
-  thudO.frequency.setValueAtTime(180 + level * 15, t);
+  shimO.connect(shimG).connect(comp); shimO.start(t); shimO.stop(t + shimDur);
+  const thudO = audioCtx.createOscillator(); const thudG = audioCtx.createGain();
+  thudO.type = 'sine'; thudO.frequency.setValueAtTime(180 + level * 15, t);
   thudO.frequency.exponentialRampToValueAtTime(60, t + 0.06);
   thudG.gain.setValueAtTime(0.15 * intensity, t);
   thudG.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
-  thudO.connect(thudG).connect(comp);
-  thudO.start(t);
-  thudO.stop(t + 0.08);
+  thudO.connect(thudG).connect(comp); thudO.start(t); thudO.stop(t + 0.08);
 }
 
-// 💧 水滴聲 — ASMR 水滴碰撞：清脆滴落 + 漣漪泛音 + 柔和水花
 function playMergeSoundWaterDrop(level) {
-  ensureAudioCtx();
-  const t = audioCtx.currentTime;
-  const intensity = 0.5 + level * 0.06;
-
-  // 1. 水滴「叮」—— 極短正弦 ping，快速頻率下滑模擬滴落
-  const dropFreq = 1800 - level * 120;
-  const dropDur = 0.08 + level * 0.01;
-  const dropO = audioCtx.createOscillator();
-  const dropG = audioCtx.createGain();
-  dropO.type = 'sine';
-  dropO.frequency.setValueAtTime(dropFreq, t);
+  ensureAudioCtx(); const t = audioCtx.currentTime; const intensity = 0.5 + level * 0.06;
+  const dropFreq = 1800 - level * 120; const dropDur = 0.08 + level * 0.01;
+  const dropO = audioCtx.createOscillator(); const dropG = audioCtx.createGain();
+  dropO.type = 'sine'; dropO.frequency.setValueAtTime(dropFreq, t);
   dropO.frequency.exponentialRampToValueAtTime(dropFreq * 0.25, t + dropDur);
   dropG.gain.setValueAtTime(0.5 * intensity, t);
   dropG.gain.exponentialRampToValueAtTime(0.001, t + dropDur);
-  dropO.connect(dropG).connect(audioCtx.destination);
-  dropO.start(t);
-  dropO.stop(t + dropDur);
-
-  // 2. 漣漪泛音 —— 兩層柔和正弦波，微走調產生空間感
+  dropO.connect(dropG).connect(audioCtx.destination); dropO.start(t); dropO.stop(t + dropDur);
   const rippleDur = 0.35 + level * 0.04;
   for (let i = 0; i < 2; i++) {
-    const ripO = audioCtx.createOscillator();
-    const ripG = audioCtx.createGain();
-    ripO.type = 'sine';
-    const rFreq = (600 - level * 30) + (i === 0 ? 8 : -8);
+    const ripO = audioCtx.createOscillator(); const ripG = audioCtx.createGain();
+    ripO.type = 'sine'; const rFreq = (600 - level * 30) + (i === 0 ? 8 : -8);
     ripO.frequency.setValueAtTime(rFreq, t + 0.02);
     ripO.frequency.exponentialRampToValueAtTime(rFreq * 0.4, t + rippleDur);
     ripG.gain.setValueAtTime(0.001, t);
     ripG.gain.linearRampToValueAtTime(0.12 * intensity, t + 0.03);
     ripG.gain.exponentialRampToValueAtTime(0.001, t + rippleDur);
-    ripO.connect(ripG).connect(audioCtx.destination);
-    ripO.start(t + 0.02);
-    ripO.stop(t + rippleDur);
+    ripO.connect(ripG).connect(audioCtx.destination); ripO.start(t + 0.02); ripO.stop(t + rippleDur);
   }
-
-  // 3. 柔和水花噪聲 —— 極輕帶通噪聲，短暫的「沙」感
   const splashDur = 0.1 + level * 0.015;
   const splSz = Math.floor(audioCtx.sampleRate * splashDur);
   const splBuf = audioCtx.createBuffer(1, splSz, audioCtx.sampleRate);
   const splData = splBuf.getChannelData(0);
-  for (let i = 0; i < splSz; i++) {
-    splData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / splSz, 4);
-  }
-  const splSrc = audioCtx.createBufferSource();
-  splSrc.buffer = splBuf;
+  for (let i = 0; i < splSz; i++) splData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / splSz, 4);
+  const splSrc = audioCtx.createBufferSource(); splSrc.buffer = splBuf;
   const splG = audioCtx.createGain();
   splG.gain.setValueAtTime(0.08 * intensity, t + 0.01);
   splG.gain.exponentialRampToValueAtTime(0.001, t + splashDur);
-  const splBPF = audioCtx.createBiquadFilter();
-  splBPF.type = 'bandpass';
-  splBPF.frequency.setValueAtTime(3000, t);
-  splBPF.Q.setValueAtTime(2, t);
+  const splBPF = audioCtx.createBiquadFilter(); splBPF.type = 'bandpass';
+  splBPF.frequency.setValueAtTime(3000, t); splBPF.Q.setValueAtTime(2, t);
   splSrc.connect(splBPF).connect(splG).connect(audioCtx.destination);
-  splSrc.start(t + 0.01);
-  splSrc.stop(t + splashDur + 0.01);
-
-  // 4. ASMR 尾韻 shimmer —— 極輕高頻緩慢消散
-  const shimO = audioCtx.createOscillator();
-  const shimG = audioCtx.createGain();
-  shimO.type = 'sine';
-  shimO.frequency.setValueAtTime(4000 + level * 200, t + 0.05);
+  splSrc.start(t + 0.01); splSrc.stop(t + splashDur + 0.01);
+  const shimO = audioCtx.createOscillator(); const shimG = audioCtx.createGain();
+  shimO.type = 'sine'; shimO.frequency.setValueAtTime(4000 + level * 200, t + 0.05);
   shimO.frequency.exponentialRampToValueAtTime(2000, t + 0.5);
   shimG.gain.setValueAtTime(0.001, t);
   shimG.gain.linearRampToValueAtTime(0.04 * intensity, t + 0.08);
   shimG.gain.exponentialRampToValueAtTime(0.001, t + 0.5 + level * 0.03);
   shimO.connect(shimG).connect(audioCtx.destination);
-  shimO.start(t + 0.05);
-  shimO.stop(t + 0.5 + level * 0.03);
+  shimO.start(t + 0.05); shimO.stop(t + 0.5 + level * 0.03);
 }
 
-// 💥 炸彈聲 — ASMR 深沉爆破：滿足感低頻衝擊 + 溫暖碎裂餘韻
 function playMergeSoundBomb(level) {
-  ensureAudioCtx();
-  const t = audioCtx.currentTime;
-  const intensity = 0.55 + level * 0.07;
-
+  ensureAudioCtx(); const t = audioCtx.currentTime; const intensity = 0.55 + level * 0.07;
   const comp = audioCtx.createDynamicsCompressor();
-  comp.threshold.setValueAtTime(-15, t);
-  comp.knee.setValueAtTime(6, t);
-  comp.ratio.setValueAtTime(8, t);
-  comp.attack.setValueAtTime(0.001, t);
-  comp.release.setValueAtTime(0.2, t);
-  comp.connect(audioCtx.destination);
-
-  // 1. 深沉 sub-bass 衝擊 —— 極低頻正弦，給人胸腔共鳴的滿足感
+  comp.threshold.setValueAtTime(-15, t); comp.knee.setValueAtTime(6, t);
+  comp.ratio.setValueAtTime(8, t); comp.attack.setValueAtTime(0.001, t);
+  comp.release.setValueAtTime(0.2, t); comp.connect(audioCtx.destination);
   const subDur = 0.25 + level * 0.03;
-  const subO = audioCtx.createOscillator();
-  const subG = audioCtx.createGain();
-  subO.type = 'sine';
-  subO.frequency.setValueAtTime(60 + level * 5, t);
+  const subO = audioCtx.createOscillator(); const subG = audioCtx.createGain();
+  subO.type = 'sine'; subO.frequency.setValueAtTime(60 + level * 5, t);
   subO.frequency.exponentialRampToValueAtTime(25, t + subDur);
   subG.gain.setValueAtTime(0.5 * intensity, t);
   subG.gain.exponentialRampToValueAtTime(0.001, t + subDur);
-  subO.connect(subG).connect(comp);
-  subO.start(t);
-  subO.stop(t + subDur);
-
-  // 2. 瞬態衝擊 click —— 極短噪聲脈衝，爆炸的「碰」
+  subO.connect(subG).connect(comp); subO.start(t); subO.stop(t + subDur);
   const clickDur = 0.02;
   const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
   const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
   const clickData = clickBuf.getChannelData(0);
-  for (let i = 0; i < clickSz; i++) {
-    clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 6);
-  }
-  const clickSrc = audioCtx.createBufferSource();
-  clickSrc.buffer = clickBuf;
+  for (let i = 0; i < clickSz; i++) clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 6);
+  const clickSrc = audioCtx.createBufferSource(); clickSrc.buffer = clickBuf;
   const clickG = audioCtx.createGain();
   clickG.gain.setValueAtTime(0.4 * intensity, t);
   clickG.gain.exponentialRampToValueAtTime(0.001, t + clickDur);
-  clickSrc.connect(clickG).connect(comp);
-  clickSrc.start(t);
-  clickSrc.stop(t + clickDur);
-
-  // 3. 溫暖碎裂餘韻 —— 濾波噪聲緩慢消散，像遠處爆炸的回音
+  clickSrc.connect(clickG).connect(comp); clickSrc.start(t); clickSrc.stop(t + clickDur);
   const crklDur = 0.4 + level * 0.05;
   const crklSz = Math.floor(audioCtx.sampleRate * crklDur);
   const crklBuf = audioCtx.createBuffer(1, crklSz, audioCtx.sampleRate);
   const crklData = crklBuf.getChannelData(0);
-  for (let i = 0; i < crklSz; i++) {
-    crklData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / crklSz, 3);
-  }
-  const crklSrc = audioCtx.createBufferSource();
-  crklSrc.buffer = crklBuf;
+  for (let i = 0; i < crklSz; i++) crklData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / crklSz, 3);
+  const crklSrc = audioCtx.createBufferSource(); crklSrc.buffer = crklBuf;
   const crklG = audioCtx.createGain();
   crklG.gain.setValueAtTime(0.001, t);
   crklG.gain.linearRampToValueAtTime(0.15 * intensity, t + 0.03);
   crklG.gain.exponentialRampToValueAtTime(0.001, t + crklDur);
-  const crklLPF = audioCtx.createBiquadFilter();
-  crklLPF.type = 'lowpass';
+  const crklLPF = audioCtx.createBiquadFilter(); crklLPF.type = 'lowpass';
   crklLPF.frequency.setValueAtTime(2000 + level * 200, t);
   crklLPF.frequency.exponentialRampToValueAtTime(400, t + crklDur);
   crklSrc.connect(crklLPF).connect(crklG).connect(comp);
-  crklSrc.start(t);
-  crklSrc.stop(t + crklDur);
-
-  // 4. 低沉共鳴尾韻 —— ASMR 的溫暖低頻共振
+  crklSrc.start(t); crklSrc.stop(t + crklDur);
   const resDur = 0.5 + level * 0.04;
-  const resO = audioCtx.createOscillator();
-  const resG = audioCtx.createGain();
-  resO.type = 'triangle';
-  resO.frequency.setValueAtTime(120 + level * 10, t + 0.03);
+  const resO = audioCtx.createOscillator(); const resG = audioCtx.createGain();
+  resO.type = 'triangle'; resO.frequency.setValueAtTime(120 + level * 10, t + 0.03);
   resO.frequency.exponentialRampToValueAtTime(40, t + resDur);
   resG.gain.setValueAtTime(0.001, t);
   resG.gain.linearRampToValueAtTime(0.1 * intensity, t + 0.06);
   resG.gain.exponentialRampToValueAtTime(0.001, t + resDur);
-  resO.connect(resG).connect(comp);
-  resO.start(t + 0.03);
-  resO.stop(t + resDur);
+  resO.connect(resG).connect(comp); resO.start(t + 0.03); resO.stop(t + resDur);
 }
 
-// 🪨 堅硬石頭聲 — ASMR 岩石碰撞：銳利衝擊 + 密實中頻共鳴 + 碎礫質感
 function playMergeSoundStone(level) {
-  ensureAudioCtx();
-  const t = audioCtx.currentTime;
-  const intensity = 0.6 + level * 0.07;
-
-  // 1. 石頭衝擊 click —— 極短、極脆的瞬態，高通濾波
+  ensureAudioCtx(); const t = audioCtx.currentTime; const intensity = 0.6 + level * 0.07;
   const clickDur = 0.008;
   const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
   const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
   const clickData = clickBuf.getChannelData(0);
-  for (let i = 0; i < clickSz; i++) {
-    clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 12);
-  }
-  const clickSrc = audioCtx.createBufferSource();
-  clickSrc.buffer = clickBuf;
+  for (let i = 0; i < clickSz; i++) clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 12);
+  const clickSrc = audioCtx.createBufferSource(); clickSrc.buffer = clickBuf;
   const clickG = audioCtx.createGain();
   clickG.gain.setValueAtTime(0.8 * intensity, t);
   clickG.gain.exponentialRampToValueAtTime(0.001, t + clickDur);
-  const clickHPF = audioCtx.createBiquadFilter();
-  clickHPF.type = 'highpass';
-  clickHPF.frequency.setValueAtTime(3000, t);
-  clickHPF.Q.setValueAtTime(2, t);
+  const clickHPF = audioCtx.createBiquadFilter(); clickHPF.type = 'highpass';
+  clickHPF.frequency.setValueAtTime(3000, t); clickHPF.Q.setValueAtTime(2, t);
   clickSrc.connect(clickHPF).connect(clickG).connect(audioCtx.destination);
-  clickSrc.start(t);
-  clickSrc.stop(t + clickDur);
-
-  // 2. 密實中頻共鳴 —— 石頭碰撞特有的「叩叩」聲
-  const knockDur = 0.12 + level * 0.02;
-  const knockFreq = 800 - level * 40;
-  const knockO = audioCtx.createOscillator();
-  const knockG = audioCtx.createGain();
-  knockO.type = 'triangle';
-  knockO.frequency.setValueAtTime(knockFreq, t);
+  clickSrc.start(t); clickSrc.stop(t + clickDur);
+  const knockDur = 0.12 + level * 0.02; const knockFreq = 800 - level * 40;
+  const knockO = audioCtx.createOscillator(); const knockG = audioCtx.createGain();
+  knockO.type = 'triangle'; knockO.frequency.setValueAtTime(knockFreq, t);
   knockO.frequency.exponentialRampToValueAtTime(knockFreq * 0.5, t + knockDur);
   knockG.gain.setValueAtTime(0.35 * intensity, t);
   knockG.gain.exponentialRampToValueAtTime(0.001, t + knockDur);
-  const knockBPF = audioCtx.createBiquadFilter();
-  knockBPF.type = 'bandpass';
-  knockBPF.frequency.setValueAtTime(knockFreq, t);
-  knockBPF.Q.setValueAtTime(5, t);
+  const knockBPF = audioCtx.createBiquadFilter(); knockBPF.type = 'bandpass';
+  knockBPF.frequency.setValueAtTime(knockFreq, t); knockBPF.Q.setValueAtTime(5, t);
   knockO.connect(knockBPF).connect(knockG).connect(audioCtx.destination);
-  knockO.start(t);
-  knockO.stop(t + knockDur);
-
-  // 3. 碎礫質感噪聲 —— 帶通噪聲模擬石頭表面摩擦的 ASMR 顆粒感
+  knockO.start(t); knockO.stop(t + knockDur);
   const gritDur = 0.15 + level * 0.02;
   const gritSz = Math.floor(audioCtx.sampleRate * gritDur);
   const gritBuf = audioCtx.createBuffer(1, gritSz, audioCtx.sampleRate);
   const gritData = gritBuf.getChannelData(0);
-  for (let i = 0; i < gritSz; i++) {
-    gritData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / gritSz, 5);
-  }
-  const gritSrc = audioCtx.createBufferSource();
-  gritSrc.buffer = gritBuf;
+  for (let i = 0; i < gritSz; i++) gritData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / gritSz, 5);
+  const gritSrc = audioCtx.createBufferSource(); gritSrc.buffer = gritBuf;
   const gritG = audioCtx.createGain();
   gritG.gain.setValueAtTime(0.18 * intensity, t + 0.005);
   gritG.gain.exponentialRampToValueAtTime(0.001, t + gritDur);
-  const gritBPF = audioCtx.createBiquadFilter();
-  gritBPF.type = 'bandpass';
-  gritBPF.frequency.setValueAtTime(1500 + level * 100, t);
-  gritBPF.Q.setValueAtTime(3, t);
+  const gritBPF = audioCtx.createBiquadFilter(); gritBPF.type = 'bandpass';
+  gritBPF.frequency.setValueAtTime(1500 + level * 100, t); gritBPF.Q.setValueAtTime(3, t);
   gritSrc.connect(gritBPF).connect(gritG).connect(audioCtx.destination);
-  gritSrc.start(t + 0.005);
-  gritSrc.stop(t + gritDur);
-
-  // 4. 短促重量低頻 —— 石頭碰撞的質量感
-  const thudO = audioCtx.createOscillator();
-  const thudG = audioCtx.createGain();
-  thudO.type = 'sine';
-  thudO.frequency.setValueAtTime(200 + level * 10, t);
+  gritSrc.start(t + 0.005); gritSrc.stop(t + gritDur);
+  const thudO = audioCtx.createOscillator(); const thudG = audioCtx.createGain();
+  thudO.type = 'sine'; thudO.frequency.setValueAtTime(200 + level * 10, t);
   thudO.frequency.exponentialRampToValueAtTime(70, t + 0.05);
   thudG.gain.setValueAtTime(0.25 * intensity, t);
   thudG.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
-  thudO.connect(thudG).connect(audioCtx.destination);
-  thudO.start(t);
-  thudO.stop(t + 0.07);
-
-  // 5. 極輕尾韻 —— 石頭碰後的微弱共鳴
+  thudO.connect(thudG).connect(audioCtx.destination); thudO.start(t); thudO.stop(t + 0.07);
   const tailDur = 0.2 + level * 0.03;
-  const tailO = audioCtx.createOscillator();
-  const tailG = audioCtx.createGain();
-  tailO.type = 'sine';
-  tailO.frequency.setValueAtTime(1200 + level * 50, t + 0.02);
+  const tailO = audioCtx.createOscillator(); const tailG = audioCtx.createGain();
+  tailO.type = 'sine'; tailO.frequency.setValueAtTime(1200 + level * 50, t + 0.02);
   tailO.frequency.exponentialRampToValueAtTime(600, t + tailDur);
   tailG.gain.setValueAtTime(0.001, t);
   tailG.gain.linearRampToValueAtTime(0.04 * intensity, t + 0.04);
   tailG.gain.exponentialRampToValueAtTime(0.001, t + tailDur);
   tailO.connect(tailG).connect(audioCtx.destination);
-  tailO.start(t + 0.02);
-  tailO.stop(t + tailDur);
+  tailO.start(t + 0.02); tailO.stop(t + tailDur);
 }
 
-// 🌌 宇宙電波聲 — ASMR 太空電波：空靈掃頻 + 星塵 shimmer + 深空餘韻
 function playMergeSoundCosmic(level) {
-  ensureAudioCtx();
-  const t = audioCtx.currentTime;
-  const intensity = 0.5 + level * 0.06;
-
-  // 1. FM 合成掃頻 —— 太空電波的「嗶呦」聲
+  ensureAudioCtx(); const t = audioCtx.currentTime; const intensity = 0.5 + level * 0.06;
   const fmDur = 0.2 + level * 0.03;
-  const carrier = audioCtx.createOscillator();
-  const modulator = audioCtx.createOscillator();
-  const modGain = audioCtx.createGain();
-  const carGain = audioCtx.createGain();
-  modulator.type = 'sine';
-  modulator.frequency.setValueAtTime(200 + level * 30, t);
+  const carrier = audioCtx.createOscillator(); const modulator = audioCtx.createOscillator();
+  const modGain = audioCtx.createGain(); const carGain = audioCtx.createGain();
+  modulator.type = 'sine'; modulator.frequency.setValueAtTime(200 + level * 30, t);
   modulator.frequency.exponentialRampToValueAtTime(50, t + fmDur);
   modGain.gain.setValueAtTime(800 + level * 100, t);
   modGain.gain.exponentialRampToValueAtTime(50, t + fmDur);
-  carrier.type = 'sine';
-  carrier.frequency.setValueAtTime(1500 - level * 60, t);
+  carrier.type = 'sine'; carrier.frequency.setValueAtTime(1500 - level * 60, t);
   carrier.frequency.exponentialRampToValueAtTime(400, t + fmDur);
   carGain.gain.setValueAtTime(0.25 * intensity, t);
   carGain.gain.exponentialRampToValueAtTime(0.001, t + fmDur);
-  modulator.connect(modGain);
-  modGain.connect(carrier.frequency);
+  modulator.connect(modGain); modGain.connect(carrier.frequency);
   carrier.connect(carGain).connect(audioCtx.destination);
-  modulator.start(t);
-  carrier.start(t);
-  modulator.stop(t + fmDur);
-  carrier.stop(t + fmDur);
-
-  // 2. 星塵 shimmer —— 多層極輕高頻正弦，產生銀河般的閃爍
-  const shimCount = 3;
+  modulator.start(t); carrier.start(t); modulator.stop(t + fmDur); carrier.stop(t + fmDur);
   const shimBase = 3000 + level * 200;
-  for (let i = 0; i < shimCount; i++) {
+  for (let i = 0; i < 3; i++) {
     const shimDur = 0.5 + level * 0.05 + i * 0.15;
-    const shimO = audioCtx.createOscillator();
-    const shimG = audioCtx.createGain();
-    shimO.type = 'sine';
-    const freq = shimBase + i * 700 + Math.random() * 200;
+    const shimO = audioCtx.createOscillator(); const shimG = audioCtx.createGain();
+    shimO.type = 'sine'; const freq = shimBase + i * 700 + Math.random() * 200;
     shimO.frequency.setValueAtTime(freq, t + 0.03 + i * 0.04);
     shimO.frequency.exponentialRampToValueAtTime(freq * 0.4, t + shimDur);
     shimG.gain.setValueAtTime(0.001, t);
     shimG.gain.linearRampToValueAtTime(0.05 * intensity / (i + 1), t + 0.06 + i * 0.04);
     shimG.gain.exponentialRampToValueAtTime(0.001, t + shimDur);
     shimO.connect(shimG).connect(audioCtx.destination);
-    shimO.start(t + 0.03 + i * 0.04);
-    shimO.stop(t + shimDur);
+    shimO.start(t + 0.03 + i * 0.04); shimO.stop(t + shimDur);
   }
-
-  // 3. 深空低頻共鳴 —— 緩慢脈動的低頻，如太空背景輻射
   const padDur = 0.6 + level * 0.06;
-  const padO = audioCtx.createOscillator();
-  const padG = audioCtx.createGain();
-  padO.type = 'triangle';
-  padO.frequency.setValueAtTime(90 + level * 8, t);
+  const padO = audioCtx.createOscillator(); const padG = audioCtx.createGain();
+  padO.type = 'triangle'; padO.frequency.setValueAtTime(90 + level * 8, t);
   padO.frequency.exponentialRampToValueAtTime(50 + level * 3, t + padDur);
   padG.gain.setValueAtTime(0.001, t);
   padG.gain.linearRampToValueAtTime(0.1 * intensity, t + 0.1);
   padG.gain.exponentialRampToValueAtTime(0.001, t + padDur);
-  padO.connect(padG).connect(audioCtx.destination);
-  padO.start(t);
-  padO.stop(t + padDur);
-
-  // 4. 太空靜電碎片 —— 極輕的高頻噪聲碎片
+  padO.connect(padG).connect(audioCtx.destination); padO.start(t); padO.stop(t + padDur);
   const statDur = 0.15 + level * 0.02;
   const statSz = Math.floor(audioCtx.sampleRate * statDur);
   const statBuf = audioCtx.createBuffer(1, statSz, audioCtx.sampleRate);
   const statData = statBuf.getChannelData(0);
-  for (let i = 0; i < statSz; i++) {
-    statData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / statSz, 6);
-  }
-  const statSrc = audioCtx.createBufferSource();
-  statSrc.buffer = statBuf;
+  for (let i = 0; i < statSz; i++) statData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / statSz, 6);
+  const statSrc = audioCtx.createBufferSource(); statSrc.buffer = statBuf;
   const statG = audioCtx.createGain();
   statG.gain.setValueAtTime(0.06 * intensity, t + 0.01);
   statG.gain.exponentialRampToValueAtTime(0.001, t + statDur);
-  const statHPF = audioCtx.createBiquadFilter();
-  statHPF.type = 'highpass';
+  const statHPF = audioCtx.createBiquadFilter(); statHPF.type = 'highpass';
   statHPF.frequency.setValueAtTime(5000, t);
   statSrc.connect(statHPF).connect(statG).connect(audioCtx.destination);
-  statSrc.start(t + 0.01);
-  statSrc.stop(t + statDur + 0.01);
+  statSrc.start(t + 0.01); statSrc.stop(t + statDur + 0.01);
 }
 
 // ─── Leaderboard API ────────────────────────
 async function submitScore(pid, sc, diff, playTimeSec) {
   try {
     await fetch('/api/scores', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        player_id: pid,
-        score: sc,
-        difficulty: diff,
-        play_time: playTimeSec
-      })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ player_id: pid, score: sc, difficulty: diff, play_time: playTimeSec })
     });
-  } catch (e) {
-    console.warn('Failed to submit score:', e);
-  }
+  } catch (e) { console.warn('Failed to submit score:', e); }
 }
 
-function openLeaderboard() {
-  loadLeaderboard();
-  document.getElementById('leaderboard').classList.remove('hidden');
-}
-
-function closeLeaderboard() {
-  document.getElementById('leaderboard').classList.add('hidden');
-}
+function openLeaderboard() { loadLeaderboard(); document.getElementById('leaderboard').classList.remove('hidden'); }
+function closeLeaderboard() { document.getElementById('leaderboard').classList.add('hidden'); }
 
 async function loadLeaderboard() {
   const tbody = document.getElementById('leaderboard-body');
   tbody.innerHTML = '<tr><td colspan="6" style="color:rgba(255,255,255,0.3)">載入中...</td></tr>';
   try {
-    const res = await fetch('/api/scores');
-    const data = await res.json();
-    if (!data.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="color:rgba(255,255,255,0.3)">尚無紀錄</td></tr>';
-      return;
-    }
+    const res = await fetch('/api/scores'); const data = await res.json();
+    if (!data.length) { tbody.innerHTML = '<tr><td colspan="6" style="color:rgba(255,255,255,0.3)">尚無紀錄</td></tr>'; return; }
     tbody.innerHTML = data.map((row, i) => {
       const mins = Math.floor(row.play_time / 60);
       const secs = row.play_time % 60;
       const timeStr = `${mins}:${String(secs).padStart(2, '0')}`;
       const diffLabel = { easy: 'Easy', normal: 'Normal', hard: 'Hard' }[row.difficulty] || row.difficulty;
-      return `<tr>
-        <td>${i + 1}</td>
-        <td>${escapeHtml(row.player_id)}</td>
-        <td>${row.score.toLocaleString()}</td>
-        <td>${diffLabel}</td>
-        <td>${timeStr}</td>
-        <td>${row.created_at}</td>
-      </tr>`;
+      return `<tr><td>${i + 1}</td><td>${escapeHtml(row.player_id)}</td><td>${row.score.toLocaleString()}</td><td>${diffLabel}</td><td>${timeStr}</td><td>${row.created_at}</td></tr>`;
     }).join('');
-  } catch (e) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color:#ff3131">無法連線伺服器</td></tr>';
-    console.warn('Failed to load leaderboard:', e);
-  }
+  } catch (e) { tbody.innerHTML = '<tr><td colspan="6" style="color:#ff3131">無法連線伺服器</td></tr>'; }
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
+function escapeHtml(str) { const div = document.createElement('div'); div.textContent = str; return div.innerHTML; }
 
 // ─── Settings ────────────────────────────────
-function openSettings() {
-  initSoundTypeSelector();
-  buildSoundPreviewGrid();
-  document.getElementById('settings').classList.remove('hidden');
-}
-
-function closeSettings() {
-  document.getElementById('settings').classList.add('hidden');
-}
+function openSettings() { initSoundTypeSelector(); buildSoundPreviewGrid(); document.getElementById('settings').classList.remove('hidden'); }
+function closeSettings() { document.getElementById('settings').classList.add('hidden'); }
 
 function initSoundTypeSelector() {
   const select = document.getElementById('sound-type-select');
-  select.value = currentSoundType;
-  // 移除舊 listener 避免重複綁定
   const newSelect = select.cloneNode(true);
   select.parentNode.replaceChild(newSelect, select);
   newSelect.value = currentSoundType;
@@ -1699,7 +1142,6 @@ function initSoundTypeSelector() {
 function buildSoundPreviewGrid() {
   const grid = document.getElementById('sound-preview-grid');
   grid.innerHTML = '';
-
   ALL_SHAPES.forEach((shape, level) => {
     const btn = document.createElement('button');
     btn.className = 'sound-preview-btn';
@@ -1707,52 +1149,29 @@ function buildSoundPreviewGrid() {
     btn.style.color = shape.color;
     btn.style.boxShadow = `0 0 12px ${hexToRGBA(shape.color, 0.15)}, inset 0 0 12px ${hexToRGBA(shape.color, 0.08)}`;
 
-    // Mini canvas to draw the shape
     const miniCanvas = document.createElement('canvas');
-    miniCanvas.width = 48;
-    miniCanvas.height = 48;
+    miniCanvas.width = 48; miniCanvas.height = 48;
     const mc = miniCanvas.getContext('2d');
     const scale = 18 / shape.radius;
-    mc.save();
-    mc.translate(24, 24);
-    mc.scale(scale, scale);
-    mc.shadowColor = shape.color;
-    mc.shadowBlur = 10;
-    mc.strokeStyle = shape.color;
-    mc.lineWidth = 4 / scale;
+    mc.save(); mc.translate(24, 24); mc.scale(scale, scale);
+    mc.shadowColor = shape.color; mc.shadowBlur = 10;
+    mc.strokeStyle = shape.color; mc.lineWidth = 4 / scale;
     mc.fillStyle = hexToRGBA(shape.color, 0.12);
     mc.beginPath();
-    if (shape.sides === 0) {
-      mc.arc(0, 0, shape.radius, 0, Math.PI * 2);
-    } else {
-      drawPolygonPath(mc, 0, 0, shape.sides, shape.radius);
-    }
-    mc.closePath();
-    mc.fill();
-    mc.stroke();
-    mc.restore();
+    if (shape.sides === 0) { mc.arc(0, 0, shape.radius, 0, Math.PI * 2); }
+    else { drawPolygonPathCanvas(mc, 0, 0, shape.sides, shape.radius); }
+    mc.closePath(); mc.fill(); mc.stroke(); mc.restore();
 
     const nameSpan = document.createElement('span');
-    nameSpan.className = 'shape-name';
-    nameSpan.textContent = shape.name;
-
+    nameSpan.className = 'shape-name'; nameSpan.textContent = shape.name;
     const levelSpan = document.createElement('span');
-    levelSpan.className = 'shape-level';
-    levelSpan.textContent = `Lv.${level}`;
-
-    btn.appendChild(miniCanvas);
-    btn.appendChild(nameSpan);
-    btn.appendChild(levelSpan);
+    levelSpan.className = 'shape-level'; levelSpan.textContent = `Lv.${level}`;
+    btn.appendChild(miniCanvas); btn.appendChild(nameSpan); btn.appendChild(levelSpan);
 
     btn.addEventListener('click', () => {
-      btn.classList.remove('playing');
-      // Force reflow to restart animation
-      void btn.offsetWidth;
-      btn.classList.add('playing');
-      playMergeSound(level);
-      setTimeout(() => btn.classList.remove('playing'), 500);
+      btn.classList.remove('playing'); void btn.offsetWidth; btn.classList.add('playing');
+      playMergeSound(level); setTimeout(() => btn.classList.remove('playing'), 500);
     });
-
     btn.addEventListener('mouseenter', () => {
       btn.style.background = hexToRGBA(shape.color, 0.1);
       btn.style.boxShadow = `0 0 25px ${hexToRGBA(shape.color, 0.3)}, inset 0 0 20px ${hexToRGBA(shape.color, 0.15)}`;
@@ -1761,18 +1180,18 @@ function buildSoundPreviewGrid() {
       btn.style.background = 'transparent';
       btn.style.boxShadow = `0 0 12px ${hexToRGBA(shape.color, 0.15)}, inset 0 0 12px ${hexToRGBA(shape.color, 0.08)}`;
     });
-
     grid.appendChild(btn);
   });
 }
 
-// ─── Utilities ───────────────────────────────
-function hexToRGBA(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
+// Canvas 2D polygon helper for settings preview
+function drawPolygonPathCanvas(ctx, cx, cy, sides, r) {
+  for (let i = 0; i < sides; i++) {
+    const a = (Math.PI * 2 * i) / sides - Math.PI / 2;
+    const px = cx + r * Math.cos(a); const py = cy + r * Math.sin(a);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
 }
 
 // ─── Start ───────────────────────────────────
-window.addEventListener('DOMContentLoaded', init);
+window.addEventListener('DOMContentLoaded', () => { init(); });
