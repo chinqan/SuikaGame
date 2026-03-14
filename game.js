@@ -64,8 +64,8 @@ let bgContainer, wallGlowContainer, gameOverLineGfx, shapesContainer;
 let particleContainer, uiContainer, aimGuideContainer;
 let bodyGraphicsMap = new Map(); // Matter body id -> PIXI.Graphics
 
-// Next preview & evo bar PixiJS apps
-let nextApp, evoApp;
+// Next preview & evo bar: 用主 app renderer 提取圖片，不再使用獨立 PIXI.Application
+let blurredBg = null; // PixiJS 模糊背景容器（取代 CSS backdrop-filter）
 
 // ─── PixiJS helpers ──────────────────────────
 function hexToNum(hex) {
@@ -184,30 +184,23 @@ async function init() {
 
   window.addEventListener('resize', onResize);
   onResize(); // apply initial scale
+
+  // 選難度畫面：截圖靜態背景並模糊，然後停止渲染器節省記憶體
+  showBlurredOverlay();
+  app.ticker.stop();
   document.getElementById('difficulty-select').classList.remove('hidden');
 }
 
 async function initNextPreview() {
-  nextApp = new PIXI.Application();
-  await nextApp.init({ width: 80, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0.3, antialias: true, resolution: 1, autoDensity: true });
+  // 不再建立獨立 PIXI.Application，直接用主 app renderer 提取圖片
   const nc = document.getElementById('next-container');
   nc.innerHTML = '';
-  nc.appendChild(nextApp.canvas);
-  nextApp.canvas.style.width = '80px';
-  nextApp.canvas.style.height = '80px';
-  nextApp.canvas.style.borderRadius = '8px';
-  nextApp.canvas.style.border = '1px solid rgba(255,255,255,0.1)';
 }
 
 async function initEvoBar() {
-  const evoW = DESIGN_W - 20;
-  evoApp = new PIXI.Application();
-  await evoApp.init({ width: evoW, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0, antialias: true, resolution: 1, autoDensity: true });
+  // 不再建立獨立 PIXI.Application
   const ec = document.getElementById('evo-container');
   ec.innerHTML = '';
-  ec.appendChild(evoApp.canvas);
-  evoApp.canvas.style.width = evoW + 'px';
-  evoApp.canvas.style.height = '80px';
 }
 
 function selectDifficulty(diff) {
@@ -282,7 +275,8 @@ function startGame() {
   drawEvolutionBar();
   document.getElementById('game-over').classList.add('hidden');
 
-  // Start game loop via ticker（恢復 triggerGameOver 停止的渲染器）
+  // 銷毀模糊背景並恢復渲染器
+  hideBlurredOverlay();
   app.ticker.start();
   app.ticker.remove(gameLoop);
   app.ticker.add(gameLoop);
@@ -618,10 +612,17 @@ const _gridFlowPool = []; // Sprite pool
 
 function getGlowTexture() {
   if (_glowTexture) return _glowTexture;
+  const R = 32; // texture 半徑
   const g = new PIXI.Graphics();
-  g.circle(0, 0, 16).fill({ color: 0xffffff, alpha: 1 });
-  const renderer = app.renderer;
-  _glowTexture = renderer.generateTexture({ target: g, resolution: 1 });
+  // 外圍光暈（最大、最透明）
+  g.circle(R, R, R).fill({ color: 0x00ffff, alpha: 0.08 });
+  // 中圈光暈
+  g.circle(R, R, R * 0.7).fill({ color: 0x00ffff, alpha: 0.18 });
+  // 內圈光暈
+  g.circle(R, R, R * 0.45).fill({ color: 0x88ffff, alpha: 0.45 });
+  // 核心亮白點
+  g.circle(R, R, R * 0.25).fill({ color: 0xffffff, alpha: 1.0 });
+  _glowTexture = app.renderer.generateTexture({ target: g, resolution: 1 });
   g.destroy();
   return _glowTexture;
 }
@@ -631,7 +632,7 @@ function spawnGridFlow() {
   const flow = {
     t: Math.random() * 0.2, speed: 0.001 + Math.random() * 0.002,
     lineIdx: isH ? Math.floor(Math.random() * 8) + 1 : Math.floor(Math.random() * 11),
-    isHorizontal: isH, size: 2.5 + Math.random() * 4.5, brightness: 0.7 + Math.random() * 0.3,
+    isHorizontal: isH, size: 8 + Math.random() * 10, brightness: 0.7 + Math.random() * 0.3,
     sprite: null
   };
   // Get or create sprite from pool
@@ -642,7 +643,7 @@ function spawnGridFlow() {
     const tex = getGlowTexture();
     flow.sprite = new PIXI.Sprite(tex);
     flow.sprite.anchor.set(0.5);
-    flow.sprite.tint = 0x00ffff;
+    flow.sprite.blendMode = 'add'; // 光暈疊加效果
     bgContainer.addChild(flow.sprite);
   }
   gridFlows.push(flow);
@@ -686,7 +687,7 @@ function updateGridFlows() {
     f.sprite.x = px;
     f.sprite.y = py;
     f.sprite.alpha = Math.max(0, alpha);
-    f.sprite.scale.set(f.size / 16); // 16 = texture radius
+    f.sprite.scale.set(f.size / 32); // 32 = texture 半徑
   }
 }
 
@@ -715,59 +716,85 @@ function gameLoop() {
 
 // ─── Next Shape Preview ──────────────────────
 function drawNextPreview() {
-  if (!nextApp) return;
-  // destroy 舊物件以釋放 GPU/記憶體資源
-  for (const child of nextApp.stage.children) child.destroy();
-  nextApp.stage.removeChildren();
+  const nc = document.getElementById('next-container');
+  nc.innerHTML = '';
   const shape = SHAPES[nextLevel];
   const scale = 28 / shape.radius;
+
+  // 在臨時 container 中渲染形狀
+  const tmp = new PIXI.Container();
   const g = new PIXI.Graphics();
   drawNeonShape(g, shape, shape.radius, true);
-  g.x = 40; g.y = 40;
-  g.scale.set(scale);
-  nextApp.stage.addChild(g);
+  g.x = 40; g.y = 40; g.scale.set(scale);
+  tmp.addChild(g);
+
+  // 用主 renderer 提取為 canvas
+  const tex = app.renderer.generateTexture({
+    target: tmp,
+    frame: new PIXI.Rectangle(0, 0, 80, 80),
+  });
+  const canvas = app.renderer.extract.canvas(new PIXI.Sprite(tex));
+  canvas.style.width = '80px';
+  canvas.style.height = '80px';
+  canvas.style.borderRadius = '8px';
+  canvas.style.border = '1px solid rgba(255,255,255,0.1)';
+  nc.appendChild(canvas);
+
+  // 清理臨時物件
+  g.destroy();
+  tmp.destroy();
+  tex.destroy(true);
 }
 
 // ─── Evolution Bar ───────────────────────────
 function drawEvolutionBar() {
-  if (!evoApp) return;
-  // destroy 舊物件以釋放 GPU/記憶體資源
-  for (const child of evoApp.stage.children) child.destroy();
-  evoApp.stage.removeChildren();
+  const ec = document.getElementById('evo-container');
+  ec.innerHTML = '';
   const count = SHAPES.length;
   const w = DESIGN_W - 20;
   const h = 80;
   const minR = 11, maxR = 34;
 
-  // Step 1: Calculate each shape's display radius (small → large)
   const radii = [];
   for (let i = 0; i < count; i++) {
     radii.push(minR + (maxR - minR) * (i / (count - 1)));
   }
 
-  // Step 2: Each shape's slot width = its display diameter (2*r)
   const diameters = radii.map(r => r * 2);
   const totalDiameters = diameters.reduce((sum, d) => sum + d, 0);
-
-  // Step 3: Scale slots to fit available width
   const slotScale = w / totalDiameters;
 
-  // Step 4: Place each shape centered in its slot
+  // 在臨時 container 中渲染所有形狀
+  const tmp = new PIXI.Container();
   let curX = 0;
   for (let i = 0; i < count; i++) {
     const shape = SHAPES[i];
     const displayR = radii[i];
     const slotW = diameters[i] * slotScale;
-    const x = curX + slotW / 2;  // center of this slot
-    const y = h / 2;              // vertical center
+    const x = curX + slotW / 2;
+    const y = h / 2;
     const scale = displayR / shape.radius;
     const g = new PIXI.Graphics();
     drawNeonShape(g, shape, shape.radius, true);
-    g.x = x; g.y = y;
-    g.scale.set(scale);
-    evoApp.stage.addChild(g);
+    g.x = x; g.y = y; g.scale.set(scale);
+    tmp.addChild(g);
     curX += slotW;
   }
+
+  // 用主 renderer 提取為 canvas
+  const tex = app.renderer.generateTexture({
+    target: tmp,
+    frame: new PIXI.Rectangle(0, 0, w, h),
+  });
+  const canvas = app.renderer.extract.canvas(new PIXI.Sprite(tex));
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  ec.appendChild(canvas);
+
+  // 清理臨時物件
+  for (const child of tmp.children) child.destroy();
+  tmp.destroy();
+  tex.destroy(true);
 }
 
 // ─── Game Over ───────────────────────────────
@@ -785,13 +812,96 @@ function checkGameOver() {
   }
 }
 
+// ─── PixiJS 模糊背景（取代 CSS backdrop-filter）─────
+function showBlurredOverlay() {
+  hideBlurredOverlay(); // 清理舊的
+
+  // 指定精確截圖區域，避免 stage bounds 偏移
+  const tex = app.renderer.generateTexture({
+    target: app.stage,
+    frame: new PIXI.Rectangle(0, 0, canvasW, canvasH),
+  });
+  const sprite = new PIXI.Sprite(tex);
+  sprite.filters = [new PIXI.BlurFilter({ strength: 6, quality: 2 })];
+
+  // 暗色覆蓋
+  const dark = new PIXI.Graphics();
+  dark.rect(0, 0, canvasW, canvasH).fill({ color: 0x000000, alpha: 0.65 });
+
+  blurredBg = new PIXI.Container();
+  blurredBg.addChild(sprite, dark);
+  app.stage.addChild(blurredBg);
+
+  // 隱藏原始背景 container（只保留模糊版本）
+  bgContainer.visible = false;
+  wallGlowContainer.visible = false;
+  gameOverLineGfx.visible = false;
+  shapesContainer.visible = false;
+  particleContainer.visible = false;
+  uiContainer.visible = false;
+  aimGuideContainer.visible = false;
+
+  // 做一次 render 讓模糊效果生效
+  app.renderer.render(app.stage);
+}
+
+function hideBlurredOverlay() {
+  if (blurredBg) {
+    app.stage.removeChild(blurredBg);
+    blurredBg.destroy({ children: true, texture: true });
+    blurredBg = null;
+  }
+  // 恢復原始 container 可見性
+  bgContainer.visible = true;
+  wallGlowContainer.visible = true;
+  gameOverLineGfx.visible = true;
+  shapesContainer.visible = true;
+  particleContainer.visible = true;
+  uiContainer.visible = true;
+  aimGuideContainer.visible = true;
+}
+
 function triggerGameOver() {
   isGameOver = true;
   // 停止遊戲循環和物理引擎
   app.ticker.remove(gameLoop);
   if (runner) Runner.stop(runner);
-  // 完全停止 PixiJS 渲染器，閒置畫面不再消耗 GPU
+
+  // ★ 先截圖模糊（在清理物件之前，保留最後一幀畫面）
+  showBlurredOverlay();
+
+  // ─── 清理所有遊戲資源 ───
+  if (engine) {
+    const bodies = Composite.allBodies(engine.world);
+    for (const body of bodies) {
+      if (bodyLevelMap.has(body.id)) Composite.remove(engine.world, body);
+    }
+    bodyLevelMap.clear();
+    mergeCooldown.clear();
+  }
+  shapesContainer.removeChildren();
+  bodyGraphicsMap.forEach(g => g.destroy());
+  bodyGraphicsMap.clear();
+  for (const p of particles) { p.display.destroy(); }
+  particles.length = 0;
+  particleContainer.removeChildren();
+  for (const ft of floatingTexts) { ft.display.destroy(); }
+  floatingTexts.length = 0;
+  uiContainer.removeChildren();
+  for (const f of gridFlows) { bgContainer.removeChild(f.sprite); f.sprite.destroy(); }
+  gridFlows.length = 0;
+  for (const s of _gridFlowPool) { bgContainer.removeChild(s); s.destroy(); }
+  _gridFlowPool.length = 0;
+  if (aimLineGfx) { aimGuideContainer.removeChild(aimLineGfx); aimLineGfx.destroy(); aimLineGfx = null; }
+  if (aimGhostGfx) { aimGuideContainer.removeChild(aimGhostGfx); aimGhostGfx.destroy(); aimGhostGfx = null; aimGhostLevel = -1; }
+  if (gameOverTimer) { clearTimeout(gameOverTimer); gameOverTimer = null; }
+  if (comboTimer) { clearTimeout(comboTimer); comboTimer = null; }
+  comboCount = 0; shakeAmount = 0;
+  app.stage.x = 0; app.stage.y = 0;
+
+  // 停止 PixiJS 渲染器（模糊背景已渲染完成）
   app.ticker.stop();
+
   if (score > highScore) { highScore = score; localStorage.setItem('neonMergeHigh', highScore.toString()); }
   document.getElementById('final-score').textContent = score;
   document.getElementById('high-score').textContent = highScore;
@@ -801,8 +911,6 @@ function triggerGameOver() {
 }
 
 function restart() {
-  app.ticker.remove(gameLoop);
-  if (runner) Runner.stop(runner);
   document.getElementById('game-over').classList.add('hidden');
   document.getElementById('difficulty-select').classList.remove('hidden');
 }
@@ -1214,8 +1322,8 @@ async function submitScore(pid, sc, diff, playTimeSec) {
   } catch (e) { console.warn('Failed to submit score:', e); }
 }
 
-function openLeaderboard() { loadLeaderboard(); document.getElementById('leaderboard').classList.remove('hidden'); }
-function closeLeaderboard() { document.getElementById('leaderboard').classList.add('hidden'); }
+function openLeaderboard() { showBlurredOverlay(); loadLeaderboard(); document.getElementById('leaderboard').classList.remove('hidden'); }
+function closeLeaderboard() { hideBlurredOverlay(); document.getElementById('leaderboard').classList.add('hidden'); }
 
 async function loadLeaderboard() {
   const tbody = document.getElementById('leaderboard-body');
@@ -1236,8 +1344,8 @@ async function loadLeaderboard() {
 function escapeHtml(str) { const div = document.createElement('div'); div.textContent = str; return div.innerHTML; }
 
 // ─── Settings ────────────────────────────────
-function openSettings() { initSoundTypeSelector(); buildSoundPreviewGrid(); document.getElementById('settings').classList.remove('hidden'); }
-function closeSettings() { document.getElementById('settings').classList.add('hidden'); }
+function openSettings() { showBlurredOverlay(); initSoundTypeSelector(); buildSoundPreviewGrid(); document.getElementById('settings').classList.remove('hidden'); }
+function closeSettings() { hideBlurredOverlay(); document.getElementById('settings').classList.add('hidden'); }
 
 function initSoundTypeSelector() {
   const select = document.getElementById('sound-type-select');
@@ -1260,18 +1368,21 @@ function buildSoundPreviewGrid() {
     btn.style.color = shape.color;
     btn.style.boxShadow = `0 0 12px ${hexToRGBA(shape.color, 0.15)}, inset 0 0 12px ${hexToRGBA(shape.color, 0.08)}`;
 
-    const miniCanvas = document.createElement('canvas');
-    miniCanvas.width = 48; miniCanvas.height = 48;
-    const mc = miniCanvas.getContext('2d');
+    // 用主 PixiJS renderer 渲染形狀，取代 Canvas2D
+    const tmp = new PIXI.Container();
+    const g = new PIXI.Graphics();
     const scale = 18 / shape.radius;
-    mc.save(); mc.translate(24, 24); mc.scale(scale, scale);
-    mc.shadowColor = shape.color; mc.shadowBlur = 10;
-    mc.strokeStyle = shape.color; mc.lineWidth = 4 / scale;
-    mc.fillStyle = hexToRGBA(shape.color, 0.12);
-    mc.beginPath();
-    if (shape.sides === 0) { mc.arc(0, 0, shape.radius, 0, Math.PI * 2); }
-    else { drawPolygonPathCanvas(mc, 0, 0, shape.sides, shape.radius); }
-    mc.closePath(); mc.fill(); mc.stroke(); mc.restore();
+    drawNeonShape(g, shape, shape.radius, true);
+    g.x = 24; g.y = 24; g.scale.set(scale);
+    tmp.addChild(g);
+    const tex = app.renderer.generateTexture({
+      target: tmp,
+      frame: new PIXI.Rectangle(0, 0, 48, 48),
+    });
+    const miniCanvas = app.renderer.extract.canvas(new PIXI.Sprite(tex));
+    miniCanvas.style.width = '48px';
+    miniCanvas.style.height = '48px';
+    g.destroy(); tmp.destroy(); tex.destroy(true);
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'shape-name'; nameSpan.textContent = shape.name;
@@ -1295,14 +1406,6 @@ function buildSoundPreviewGrid() {
   });
 }
 
-// Canvas 2D polygon helper for settings preview
-function drawPolygonPathCanvas(ctx, cx, cy, sides, r) {
-  for (let i = 0; i < sides; i++) {
-    const a = (Math.PI * 2 * i) / sides - Math.PI / 2;
-    const px = cx + r * Math.cos(a); const py = cy + r * Math.sin(a);
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-  }
-}
 
 // ─── Start ───────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => { init(); });
