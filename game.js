@@ -238,20 +238,31 @@ function startGame() {
   shapesContainer.removeChildren();
   bodyGraphicsMap.forEach(g => g.destroy());
   bodyGraphicsMap.clear();
-  // Clear particles
-  particleContainer.removeChildren();
+  // Clear particles – 必須 destroy 釋放 PIXI/GPU 資源，不能只 removeChildren
+  for (const p of particles) { p.display.destroy(); }
   particles.length = 0;
-  uiContainer.removeChildren();
+  particleContainer.removeChildren();
+  // Clear floating texts – 同上
+  for (const ft of floatingTexts) { ft.display.destroy(); }
   floatingTexts.length = 0;
+  uiContainer.removeChildren();
 
   score = 0;
   document.getElementById('score-value').textContent = '0';
   isGameOver = false;
   canDrop = true;
-  gameOverTimer = null;
+  // 必須 clearTimeout，否則舊的 gameOver 計時器會在新遊戲中觸發
+  if (gameOverTimer) { clearTimeout(gameOverTimer); gameOverTimer = null; }
   shakeAmount = 0;
+  app.stage.x = 0; app.stage.y = 0;
   comboCount = 0;
   if (comboTimer) { clearTimeout(comboTimer); comboTimer = null; }
+  // 歸還 gridFlow sprites 到物件池
+  for (const f of gridFlows) { f.sprite.visible = false; _gridFlowPool.push(f.sprite); }
+  gridFlows.length = 0;
+  // 重置瞄準線（已預繪，不需 destroy，只需重新建立）
+  if (aimLineGfx) { aimGuideContainer.removeChild(aimLineGfx); aimLineGfx.destroy(); aimLineGfx = null; }
+  if (aimGhostGfx) { aimGuideContainer.removeChild(aimGhostGfx); aimGhostGfx.destroy(); aimGhostGfx = null; aimGhostLevel = -1; }
 
   engine = Engine.create({
     gravity: { x: 0, y: 2.2 },
@@ -419,11 +430,13 @@ function spawnMergeParticles(x, y, level) {
   const shape = SHAPES[level];
   const color = hexToNum(shape.color);
 
-  // Ring
+  // Ring — 畫一次固定大小，之後用 scale 放大（避免 PixiJS v8 clear/redraw 洩漏）
+  const ringBaseR = 5;
   const ring = new PIXI.Graphics();
+  ring.circle(0, 0, ringBaseR).stroke({ color: hexToNum(shape.color), width: 4, alpha: 0.7 });
   ring.x = x; ring.y = y;
   particleContainer.addChild(ring);
-  particles.push({ type: 'ring', display: ring, radius: 5, maxRadius: shape.radius * 3.5, life: 1, decay: 0.04, color: shape.color, lineWidth: 4 });
+  particles.push({ type: 'ring', display: ring, radius: ringBaseR, baseRadius: ringBaseR, maxRadius: shape.radius * 3.5, life: 1, decay: 0.04, color: shape.color, lineWidth: 4 });
 
   // Shards
   const shardCount = 8 + level * 2;
@@ -469,8 +482,10 @@ function updateParticles() {
     }
     if (p.type === 'ring') {
       p.radius += (p.maxRadius - p.radius) * 0.15;
-      const g = p.display; g.clear();
-      g.circle(0, 0, p.radius).stroke({ color: hexToNum(p.color), width: p.lineWidth * p.life, alpha: p.life * 0.7 });
+      // 用 scale 控制 ring 大小，不再 clear/redraw（PixiJS v8 clear 洩漏）
+      const sc = p.radius / p.baseRadius;
+      p.display.scale.set(sc);
+      p.display.alpha = p.life * 0.7;
     } else {
       p.display.x += p.vx; p.display.y += p.vy;
       p.vy += 0.08;
@@ -573,15 +588,14 @@ function drawAimGuide() {
   const r = shape.radius;
   const x = Math.max(gameInsetX + r + 4, Math.min(canvasW - gameInsetX - r - 4, dropX));
 
-  // Reuse or create line graphics
-  if (!aimLineGfx) { aimLineGfx = new PIXI.Graphics(); aimGuideContainer.addChild(aimLineGfx); }
-  aimLineGfx.clear(); aimLineGfx.visible = true;
-  let cy = r + 4;
-  while (cy < gameAreaH) {
-    const end = Math.min(cy + 4, gameAreaH);
-    aimLineGfx.moveTo(x, cy).lineTo(x, end).stroke({ color: 0xffffff, width: 1, alpha: 0.12 });
-    cy += 10;
+  // 預先建立一條垂直線（x=0），只移動位置，不再每幀 clear/redraw
+  if (!aimLineGfx) {
+    aimLineGfx = new PIXI.Graphics();
+    aimLineGfx.moveTo(0, 0).lineTo(0, gameAreaH).stroke({ color: 0xffffff, width: 1, alpha: 0.10 });
+    aimGuideContainer.addChild(aimLineGfx);
   }
+  aimLineGfx.visible = true;
+  aimLineGfx.x = x;
 
   // Reuse or create ghost graphics (only recreate when level changes)
   if (!aimGhostGfx || aimGhostLevel !== currentLevel) {
@@ -598,37 +612,59 @@ function drawAimGuide() {
 
 // ─── Grid Flows (animated) ───────────────────
 let gridFlowGfx = null;
+let _glowTexture = null;
+const _gridFlowPool = []; // Sprite pool
+
+function getGlowTexture() {
+  if (_glowTexture) return _glowTexture;
+  const g = new PIXI.Graphics();
+  g.circle(0, 0, 16).fill({ color: 0xffffff, alpha: 1 });
+  const renderer = app.renderer;
+  _glowTexture = renderer.generateTexture({ target: g, resolution: 1 });
+  g.destroy();
+  return _glowTexture;
+}
+
 function spawnGridFlow() {
   const isH = Math.random() < 0.6;
-  gridFlows.push({
+  const flow = {
     t: Math.random() * 0.2, speed: 0.001 + Math.random() * 0.002,
     lineIdx: isH ? Math.floor(Math.random() * 8) + 1 : Math.floor(Math.random() * 11),
-    isHorizontal: isH, size: 2.5 + Math.random() * 4.5, brightness: 0.7 + Math.random() * 0.3
-  });
+    isHorizontal: isH, size: 2.5 + Math.random() * 4.5, brightness: 0.7 + Math.random() * 0.3,
+    sprite: null
+  };
+  // Get or create sprite from pool
+  if (_gridFlowPool.length > 0) {
+    flow.sprite = _gridFlowPool.pop();
+    flow.sprite.visible = true;
+  } else {
+    const tex = getGlowTexture();
+    flow.sprite = new PIXI.Sprite(tex);
+    flow.sprite.anchor.set(0.5);
+    flow.sprite.tint = 0x00ffff;
+    bgContainer.addChild(flow.sprite);
+  }
+  gridFlows.push(flow);
 }
 
 function updateGridFlows() {
   if (gridFlows.length < 20 && Math.random() < 0.06) spawnGridFlow();
-  for (let i = gridFlows.length - 1; i >= 0; i--) {
-    gridFlows[i].t += gridFlows[i].speed;
-    if (gridFlows[i].t > 1) {
-      // Swap-remove: avoid expensive splice
-      gridFlows[i] = gridFlows[gridFlows.length - 1];
-      gridFlows.pop();
-    }
-  }
-}
-
-function drawGridFlowsPixi() {
-  if (!gridFlowGfx) { gridFlowGfx = new PIXI.Graphics(); bgContainer.addChild(gridFlowGfx); }
-  gridFlowGfx.clear();
-
   const lx = gameInsetX, rx = canvasW - gameInsetX;
   const farY = gameAreaH - 30, farL = lx, farR = rx;
   const nearY = canvasH, nearL = -220, nearR = canvasW + 220;
   const hLines = 8, vLines = 10;
 
-  for (const f of gridFlows) {
+  for (let i = gridFlows.length - 1; i >= 0; i--) {
+    const f = gridFlows[i];
+    f.t += f.speed;
+    if (f.t > 1) {
+      // Return sprite to pool
+      f.sprite.visible = false;
+      _gridFlowPool.push(f.sprite);
+      gridFlows[i] = gridFlows[gridFlows.length - 1];
+      gridFlows.pop();
+      continue;
+    }
     let px, py;
     if (f.isHorizontal) {
       const t = f.lineIdx / hLines;
@@ -646,11 +682,10 @@ function drawGridFlowsPixi() {
     }
     const flicker = 0.6 + 0.4 * Math.sin(f.t * 40 + f.lineIdx * 7);
     const alpha = f.brightness * Math.max(0, 1 - Math.abs(f.t - 0.5) * 2.2) * flicker;
-    if (alpha <= 0) continue;
-    // Optimized 3-layer glow: outer cyan, mid cyan, bright core
-    gridFlowGfx.circle(px, py, f.size * 3).fill({ color: 0x00ffff, alpha: alpha * 0.08 });
-    gridFlowGfx.circle(px, py, f.size * 1.5).fill({ color: 0x00ffff, alpha: alpha * 0.25 });
-    gridFlowGfx.circle(px, py, f.size * 0.5).fill({ color: 0xffffff, alpha: Math.min(1, alpha * 1.1) });
+    f.sprite.x = px;
+    f.sprite.y = py;
+    f.sprite.alpha = Math.max(0, alpha);
+    f.sprite.scale.set(f.size / 16); // 16 = texture radius
   }
 }
 
@@ -658,7 +693,6 @@ function drawGridFlowsPixi() {
 function gameLoop() {
   updateParticles();
   updateGridFlows();
-  drawGridFlowsPixi();
   checkGameOver();
 
   if (shakeAmount > 0) {
@@ -681,6 +715,8 @@ function gameLoop() {
 // ─── Next Shape Preview ──────────────────────
 function drawNextPreview() {
   if (!nextApp) return;
+  // destroy 舊物件以釋放 GPU/記憶體資源
+  for (const child of nextApp.stage.children) child.destroy();
   nextApp.stage.removeChildren();
   const shape = SHAPES[nextLevel];
   const scale = 28 / shape.radius;
@@ -694,6 +730,8 @@ function drawNextPreview() {
 // ─── Evolution Bar ───────────────────────────
 function drawEvolutionBar() {
   if (!evoApp) return;
+  // destroy 舊物件以釋放 GPU/記憶體資源
+  for (const child of evoApp.stage.children) child.destroy();
   evoApp.stage.removeChildren();
   const count = SHAPES.length;
   const w = DESIGN_W - 20;
@@ -784,18 +822,44 @@ function ensureAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 }
 
+// AudioBuffer 快取：避免每次合成都重新 allocate 大型 ArrayBuffer（每個約 50~150KB）
+const _noiseBufCache = new Map();
+function getNoiseBuffer(key, numFrames, fillFn) {
+  if (_noiseBufCache.has(key)) return _noiseBufCache.get(key);
+  ensureAudioCtx();
+  const buf = audioCtx.createBuffer(1, numFrames, audioCtx.sampleRate);
+  fillFn(buf.getChannelData(0), numFrames);
+  _noiseBufCache.set(key, buf);
+  return buf;
+}
+
+// 用 onended 事件觸發全部 disconnect，讓 AudioNode 立即進入 GC young generation
+// primarySrc: OscillatorNode 或 AudioBufferSourceNode（有 onended）
+// ...nodes: 所有需要清理的節點（包含 primarySrc 本身）
+function autoDisconnect(node, duration) {
+  // 保留相容性：僅在 onended 不適用時作為後備
+  setTimeout(() => { try { node.disconnect(); } catch (e) {} }, (duration + 0.15) * 1000);
+}
+function setOnEnded(primarySrc, ...nodes) {
+  primarySrc.onended = () => {
+    nodes.forEach(n => { try { n.disconnect(); } catch (e) {} });
+  };
+}
+
 function playDropSound() {
   ensureAudioCtx();
   const t = audioCtx.currentTime;
+  const dur = 0.12;
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
   osc.type = 'sine';
   osc.frequency.setValueAtTime(500, t);
-  osc.frequency.exponentialRampToValueAtTime(150, t + 0.12);
+  osc.frequency.exponentialRampToValueAtTime(150, t + dur);
   gain.gain.setValueAtTime(0.15, t);
-  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
   osc.connect(gain).connect(audioCtx.destination);
-  osc.start(t); osc.stop(t + 0.12);
+  osc.start(t); osc.stop(t + dur);
+  setOnEnded(osc, osc, gain);
 }
 
 function playMergeSound(level) {
@@ -815,9 +879,9 @@ function playMergeSoundStandard(level) {
   comp.release.setValueAtTime(0.1, t); comp.connect(audioCtx.destination);
   const noiseDur = 0.3 + level * 0.03;
   const bufSz = Math.floor(audioCtx.sampleRate * noiseDur);
-  const nBuf = audioCtx.createBuffer(1, bufSz, audioCtx.sampleRate);
-  const nData = nBuf.getChannelData(0);
-  for (let i = 0; i < bufSz; i++) nData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSz, 2);
+  const nBuf = getNoiseBuffer(`std_noise_${level}`, bufSz, (d, n) => {
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2);
+  });
   const nSrc = audioCtx.createBufferSource(); nSrc.buffer = nBuf;
   const nGain = audioCtx.createGain();
   nGain.gain.setValueAtTime(0.5 * intensity, t);
@@ -826,12 +890,14 @@ function playMergeSoundStandard(level) {
   lpf.frequency.setValueAtTime(3000 + level * 400, t);
   lpf.frequency.exponentialRampToValueAtTime(300, t + noiseDur);
   nSrc.connect(lpf).connect(nGain).connect(comp); nSrc.start(t); nSrc.stop(t + noiseDur);
+  setOnEnded(nSrc, nSrc, lpf, nGain);
   const subO = audioCtx.createOscillator(); const subG = audioCtx.createGain();
   subO.type = 'sine'; subO.frequency.setValueAtTime(100, t);
   subO.frequency.exponentialRampToValueAtTime(20, t + 0.3);
   subG.gain.setValueAtTime(0.6 * intensity, t);
   subG.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
   subO.connect(subG).connect(comp); subO.start(t); subO.stop(t + 0.35);
+  setOnEnded(subO, subO, subG);
   const mFreq = 800 + level * 150; const mO = audioCtx.createOscillator();
   const mG = audioCtx.createGain(); mO.type = 'square';
   mO.frequency.setValueAtTime(mFreq, t);
@@ -840,6 +906,7 @@ function playMergeSoundStandard(level) {
   mG.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
   const hpf = audioCtx.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 600;
   mO.connect(hpf).connect(mG).connect(comp); mO.start(t); mO.stop(t + 0.1);
+  setOnEnded(mO, mO, hpf, mG);
   const rFreq = 300 + level * 80; const rO = audioCtx.createOscillator();
   const rG = audioCtx.createGain(); rO.type = 'sine';
   rO.frequency.setValueAtTime(rFreq, t + 0.05);
@@ -848,6 +915,8 @@ function playMergeSoundStandard(level) {
   rG.gain.linearRampToValueAtTime(0.15 * intensity, t + 0.08);
   rG.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
   rO.connect(rG).connect(comp); rO.start(t); rO.stop(t + 0.45);
+  // rO 是最後停止的節點，由它負責 disconnect comp
+  setOnEnded(rO, rO, rG, comp);
 }
 
 function playMergeSoundCrystal(level) {
@@ -858,9 +927,9 @@ function playMergeSoundCrystal(level) {
   comp.release.setValueAtTime(0.15, t); comp.connect(audioCtx.destination);
   const clickDur = 0.012;
   const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
-  const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
-  const clickData = clickBuf.getChannelData(0);
-  for (let i = 0; i < clickSz; i++) clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 8);
+  const clickBuf = getNoiseBuffer(`cry_click_${level}`, clickSz, (d, n) => {
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 8);
+  });
   const clickSrc = audioCtx.createBufferSource(); clickSrc.buffer = clickBuf;
   const clickGain = audioCtx.createGain();
   clickGain.gain.setValueAtTime(0.7 * intensity, t);
@@ -869,6 +938,7 @@ function playMergeSoundCrystal(level) {
   clickHPF.frequency.setValueAtTime(2000, t); clickHPF.Q.setValueAtTime(1.5, t);
   clickSrc.connect(clickHPF).connect(clickGain).connect(comp);
   clickSrc.start(t); clickSrc.stop(t + clickDur);
+  setOnEnded(clickSrc, clickSrc, clickHPF, clickGain);
   const pingFreq = 3200 - level * 180; const pingDur = 0.15 + level * 0.025;
   const pingO = audioCtx.createOscillator(); const pingG = audioCtx.createGain();
   pingO.type = 'sine'; pingO.frequency.setValueAtTime(pingFreq, t);
@@ -879,6 +949,7 @@ function playMergeSoundCrystal(level) {
   const pingBPF = audioCtx.createBiquadFilter(); pingBPF.type = 'bandpass';
   pingBPF.frequency.setValueAtTime(pingFreq, t); pingBPF.Q.setValueAtTime(3, t);
   pingO.connect(pingBPF).connect(pingG).connect(comp); pingO.start(t); pingO.stop(t + pingDur);
+  setOnEnded(pingO, pingO, pingBPF, pingG);
   const resDur = 0.25 + level * 0.04; const resBase = 1800 - level * 100; const detune = 12 + level * 3;
   for (let d = 0; d < 2; d++) {
     const resO = audioCtx.createOscillator(); const resG = audioCtx.createGain();
@@ -887,6 +958,7 @@ function playMergeSoundCrystal(level) {
     resG.gain.setValueAtTime(0.12 * intensity, t + 0.002);
     resG.gain.exponentialRampToValueAtTime(0.001, t + resDur);
     resO.connect(resG).connect(comp); resO.start(t); resO.stop(t + resDur);
+    setOnEnded(resO, resO, resG);
   }
   const shimFreq = 5000 + level * 300; const shimDur = 0.4 + level * 0.05;
   const shimO = audioCtx.createOscillator(); const shimG = audioCtx.createGain();
@@ -902,6 +974,9 @@ function playMergeSoundCrystal(level) {
   thudG.gain.setValueAtTime(0.15 * intensity, t);
   thudG.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
   thudO.connect(thudG).connect(comp); thudO.start(t); thudO.stop(t + 0.08);
+  setOnEnded(thudO, thudO, thudG);
+  // shimO 最後停止，由它負責 disconnect comp
+  setOnEnded(shimO, shimO, shimG, comp);
 }
 
 function playMergeSoundWaterDrop(level) {
@@ -913,6 +988,7 @@ function playMergeSoundWaterDrop(level) {
   dropG.gain.setValueAtTime(0.5 * intensity, t);
   dropG.gain.exponentialRampToValueAtTime(0.001, t + dropDur);
   dropO.connect(dropG).connect(audioCtx.destination); dropO.start(t); dropO.stop(t + dropDur);
+  setOnEnded(dropO, dropO, dropG);
   const rippleDur = 0.35 + level * 0.04;
   for (let i = 0; i < 2; i++) {
     const ripO = audioCtx.createOscillator(); const ripG = audioCtx.createGain();
@@ -923,12 +999,13 @@ function playMergeSoundWaterDrop(level) {
     ripG.gain.linearRampToValueAtTime(0.12 * intensity, t + 0.03);
     ripG.gain.exponentialRampToValueAtTime(0.001, t + rippleDur);
     ripO.connect(ripG).connect(audioCtx.destination); ripO.start(t + 0.02); ripO.stop(t + rippleDur);
+    setOnEnded(ripO, ripO, ripG);
   }
   const splashDur = 0.1 + level * 0.015;
   const splSz = Math.floor(audioCtx.sampleRate * splashDur);
-  const splBuf = audioCtx.createBuffer(1, splSz, audioCtx.sampleRate);
-  const splData = splBuf.getChannelData(0);
-  for (let i = 0; i < splSz; i++) splData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / splSz, 4);
+  const splBuf = getNoiseBuffer(`wdrop_spl_${level}`, splSz, (d, n) => {
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 4);
+  });
   const splSrc = audioCtx.createBufferSource(); splSrc.buffer = splBuf;
   const splG = audioCtx.createGain();
   splG.gain.setValueAtTime(0.08 * intensity, t + 0.01);
@@ -937,14 +1014,17 @@ function playMergeSoundWaterDrop(level) {
   splBPF.frequency.setValueAtTime(3000, t); splBPF.Q.setValueAtTime(2, t);
   splSrc.connect(splBPF).connect(splG).connect(audioCtx.destination);
   splSrc.start(t + 0.01); splSrc.stop(t + splashDur + 0.01);
+  setOnEnded(splSrc, splSrc, splBPF, splG);
+  const shimDur = 0.5 + level * 0.03;
   const shimO = audioCtx.createOscillator(); const shimG = audioCtx.createGain();
   shimO.type = 'sine'; shimO.frequency.setValueAtTime(4000 + level * 200, t + 0.05);
   shimO.frequency.exponentialRampToValueAtTime(2000, t + 0.5);
   shimG.gain.setValueAtTime(0.001, t);
   shimG.gain.linearRampToValueAtTime(0.04 * intensity, t + 0.08);
-  shimG.gain.exponentialRampToValueAtTime(0.001, t + 0.5 + level * 0.03);
+  shimG.gain.exponentialRampToValueAtTime(0.001, t + shimDur);
   shimO.connect(shimG).connect(audioCtx.destination);
-  shimO.start(t + 0.05); shimO.stop(t + 0.5 + level * 0.03);
+  shimO.start(t + 0.05); shimO.stop(t + shimDur);
+  setOnEnded(shimO, shimO, shimG);
 }
 
 function playMergeSoundBomb(level) {
@@ -960,21 +1040,23 @@ function playMergeSoundBomb(level) {
   subG.gain.setValueAtTime(0.5 * intensity, t);
   subG.gain.exponentialRampToValueAtTime(0.001, t + subDur);
   subO.connect(subG).connect(comp); subO.start(t); subO.stop(t + subDur);
+  setOnEnded(subO, subO, subG);
   const clickDur = 0.02;
   const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
-  const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
-  const clickData = clickBuf.getChannelData(0);
-  for (let i = 0; i < clickSz; i++) clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 6);
+  const clickBuf = getNoiseBuffer(`bomb_click_${level}`, clickSz, (d, n) => {
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 6);
+  });
   const clickSrc = audioCtx.createBufferSource(); clickSrc.buffer = clickBuf;
   const clickG = audioCtx.createGain();
   clickG.gain.setValueAtTime(0.4 * intensity, t);
   clickG.gain.exponentialRampToValueAtTime(0.001, t + clickDur);
   clickSrc.connect(clickG).connect(comp); clickSrc.start(t); clickSrc.stop(t + clickDur);
+  setOnEnded(clickSrc, clickSrc, clickG);
   const crklDur = 0.4 + level * 0.05;
   const crklSz = Math.floor(audioCtx.sampleRate * crklDur);
-  const crklBuf = audioCtx.createBuffer(1, crklSz, audioCtx.sampleRate);
-  const crklData = crklBuf.getChannelData(0);
-  for (let i = 0; i < crklSz; i++) crklData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / crklSz, 3);
+  const crklBuf = getNoiseBuffer(`bomb_crkl_${level}`, crklSz, (d, n) => {
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
+  });
   const crklSrc = audioCtx.createBufferSource(); crklSrc.buffer = crklBuf;
   const crklG = audioCtx.createGain();
   crklG.gain.setValueAtTime(0.001, t);
@@ -985,6 +1067,7 @@ function playMergeSoundBomb(level) {
   crklLPF.frequency.exponentialRampToValueAtTime(400, t + crklDur);
   crklSrc.connect(crklLPF).connect(crklG).connect(comp);
   crklSrc.start(t); crklSrc.stop(t + crklDur);
+  setOnEnded(crklSrc, crklSrc, crklLPF, crklG);
   const resDur = 0.5 + level * 0.04;
   const resO = audioCtx.createOscillator(); const resG = audioCtx.createGain();
   resO.type = 'triangle'; resO.frequency.setValueAtTime(120 + level * 10, t + 0.03);
@@ -993,15 +1076,16 @@ function playMergeSoundBomb(level) {
   resG.gain.linearRampToValueAtTime(0.1 * intensity, t + 0.06);
   resG.gain.exponentialRampToValueAtTime(0.001, t + resDur);
   resO.connect(resG).connect(comp); resO.start(t + 0.03); resO.stop(t + resDur);
+  setOnEnded(resO, resO, resG, comp);
 }
 
 function playMergeSoundStone(level) {
   ensureAudioCtx(); const t = audioCtx.currentTime; const intensity = 0.6 + level * 0.07;
   const clickDur = 0.008;
   const clickSz = Math.floor(audioCtx.sampleRate * clickDur);
-  const clickBuf = audioCtx.createBuffer(1, clickSz, audioCtx.sampleRate);
-  const clickData = clickBuf.getChannelData(0);
-  for (let i = 0; i < clickSz; i++) clickData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clickSz, 12);
+  const clickBuf = getNoiseBuffer(`stone_click_${level}`, clickSz, (d, n) => {
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 12);
+  });
   const clickSrc = audioCtx.createBufferSource(); clickSrc.buffer = clickBuf;
   const clickG = audioCtx.createGain();
   clickG.gain.setValueAtTime(0.8 * intensity, t);
@@ -1010,6 +1094,7 @@ function playMergeSoundStone(level) {
   clickHPF.frequency.setValueAtTime(3000, t); clickHPF.Q.setValueAtTime(2, t);
   clickSrc.connect(clickHPF).connect(clickG).connect(audioCtx.destination);
   clickSrc.start(t); clickSrc.stop(t + clickDur);
+  setOnEnded(clickSrc, clickSrc, clickHPF, clickG);
   const knockDur = 0.12 + level * 0.02; const knockFreq = 800 - level * 40;
   const knockO = audioCtx.createOscillator(); const knockG = audioCtx.createGain();
   knockO.type = 'triangle'; knockO.frequency.setValueAtTime(knockFreq, t);
@@ -1020,11 +1105,12 @@ function playMergeSoundStone(level) {
   knockBPF.frequency.setValueAtTime(knockFreq, t); knockBPF.Q.setValueAtTime(5, t);
   knockO.connect(knockBPF).connect(knockG).connect(audioCtx.destination);
   knockO.start(t); knockO.stop(t + knockDur);
+  setOnEnded(knockO, knockO, knockBPF, knockG);
   const gritDur = 0.15 + level * 0.02;
   const gritSz = Math.floor(audioCtx.sampleRate * gritDur);
-  const gritBuf = audioCtx.createBuffer(1, gritSz, audioCtx.sampleRate);
-  const gritData = gritBuf.getChannelData(0);
-  for (let i = 0; i < gritSz; i++) gritData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / gritSz, 5);
+  const gritBuf = getNoiseBuffer(`stone_grit_${level}`, gritSz, (d, n) => {
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 5);
+  });
   const gritSrc = audioCtx.createBufferSource(); gritSrc.buffer = gritBuf;
   const gritG = audioCtx.createGain();
   gritG.gain.setValueAtTime(0.18 * intensity, t + 0.005);
@@ -1033,12 +1119,14 @@ function playMergeSoundStone(level) {
   gritBPF.frequency.setValueAtTime(1500 + level * 100, t); gritBPF.Q.setValueAtTime(3, t);
   gritSrc.connect(gritBPF).connect(gritG).connect(audioCtx.destination);
   gritSrc.start(t + 0.005); gritSrc.stop(t + gritDur);
+  setOnEnded(gritSrc, gritSrc, gritBPF, gritG);
   const thudO = audioCtx.createOscillator(); const thudG = audioCtx.createGain();
   thudO.type = 'sine'; thudO.frequency.setValueAtTime(200 + level * 10, t);
   thudO.frequency.exponentialRampToValueAtTime(70, t + 0.05);
   thudG.gain.setValueAtTime(0.25 * intensity, t);
   thudG.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
   thudO.connect(thudG).connect(audioCtx.destination); thudO.start(t); thudO.stop(t + 0.07);
+  setOnEnded(thudO, thudO, thudG);
   const tailDur = 0.2 + level * 0.03;
   const tailO = audioCtx.createOscillator(); const tailG = audioCtx.createGain();
   tailO.type = 'sine'; tailO.frequency.setValueAtTime(1200 + level * 50, t + 0.02);
@@ -1048,6 +1136,7 @@ function playMergeSoundStone(level) {
   tailG.gain.exponentialRampToValueAtTime(0.001, t + tailDur);
   tailO.connect(tailG).connect(audioCtx.destination);
   tailO.start(t + 0.02); tailO.stop(t + tailDur);
+  setOnEnded(tailO, tailO, tailG);
 }
 
 function playMergeSoundCosmic(level) {
@@ -1066,6 +1155,8 @@ function playMergeSoundCosmic(level) {
   modulator.connect(modGain); modGain.connect(carrier.frequency);
   carrier.connect(carGain).connect(audioCtx.destination);
   modulator.start(t); carrier.start(t); modulator.stop(t + fmDur); carrier.stop(t + fmDur);
+  setOnEnded(modulator, modulator, modGain);
+  setOnEnded(carrier, carrier, carGain);
   const shimBase = 3000 + level * 200;
   for (let i = 0; i < 3; i++) {
     const shimDur = 0.5 + level * 0.05 + i * 0.15;
@@ -1078,6 +1169,7 @@ function playMergeSoundCosmic(level) {
     shimG.gain.exponentialRampToValueAtTime(0.001, t + shimDur);
     shimO.connect(shimG).connect(audioCtx.destination);
     shimO.start(t + 0.03 + i * 0.04); shimO.stop(t + shimDur);
+    setOnEnded(shimO, shimO, shimG);
   }
   const padDur = 0.6 + level * 0.06;
   const padO = audioCtx.createOscillator(); const padG = audioCtx.createGain();
@@ -1087,6 +1179,7 @@ function playMergeSoundCosmic(level) {
   padG.gain.linearRampToValueAtTime(0.1 * intensity, t + 0.1);
   padG.gain.exponentialRampToValueAtTime(0.001, t + padDur);
   padO.connect(padG).connect(audioCtx.destination); padO.start(t); padO.stop(t + padDur);
+  autoDisconnect(padO, padDur); autoDisconnect(padG, padDur);
   const statDur = 0.15 + level * 0.02;
   const statSz = Math.floor(audioCtx.sampleRate * statDur);
   const statBuf = audioCtx.createBuffer(1, statSz, audioCtx.sampleRate);
@@ -1100,6 +1193,7 @@ function playMergeSoundCosmic(level) {
   statHPF.frequency.setValueAtTime(5000, t);
   statSrc.connect(statHPF).connect(statG).connect(audioCtx.destination);
   statSrc.start(t + 0.01); statSrc.stop(t + statDur + 0.01);
+  autoDisconnect(statSrc, statDur); autoDisconnect(statHPF, statDur); autoDisconnect(statG, statDur);
 }
 
 // ─── Leaderboard API ────────────────────────
