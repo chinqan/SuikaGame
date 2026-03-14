@@ -134,7 +134,7 @@ async function init() {
     height: canvasH,
     backgroundColor: 0x0a0a0f,
     antialias: true,
-    resolution: window.devicePixelRatio || 1,
+    resolution: 1,
     autoDensity: true,
   });
   const container = document.getElementById('game-canvas-container');
@@ -189,7 +189,7 @@ async function init() {
 
 async function initNextPreview() {
   nextApp = new PIXI.Application();
-  await nextApp.init({ width: 80, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0.3, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+  await nextApp.init({ width: 80, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0.3, antialias: true, resolution: 1, autoDensity: true });
   const nc = document.getElementById('next-container');
   nc.innerHTML = '';
   nc.appendChild(nextApp.canvas);
@@ -202,7 +202,7 @@ async function initNextPreview() {
 async function initEvoBar() {
   const evoW = DESIGN_W - 20;
   evoApp = new PIXI.Application();
-  await evoApp.init({ width: evoW, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+  await evoApp.init({ width: evoW, height: 80, backgroundColor: 0x0a0a0f, backgroundAlpha: 0, antialias: true, resolution: 1, autoDensity: true });
   const ec = document.getElementById('evo-container');
   ec.innerHTML = '';
   ec.appendChild(evoApp.canvas);
@@ -282,7 +282,8 @@ function startGame() {
   drawEvolutionBar();
   document.getElementById('game-over').classList.add('hidden');
 
-  // Start game loop via ticker
+  // Start game loop via ticker（恢復 triggerGameOver 停止的渲染器）
+  app.ticker.start();
   app.ticker.remove(gameLoop);
   app.ticker.add(gameLoop);
 }
@@ -648,7 +649,7 @@ function spawnGridFlow() {
 }
 
 function updateGridFlows() {
-  if (gridFlows.length < 20 && Math.random() < 0.06) spawnGridFlow();
+  if (!isGameOver && gridFlows.length < 20 && Math.random() < 0.06) spawnGridFlow();
   const lx = gameInsetX, rx = canvasW - gameInsetX;
   const farY = gameAreaH - 30, farL = lx, farR = rx;
   const nearY = canvasH, nearL = -220, nearR = canvasW + 220;
@@ -786,6 +787,11 @@ function checkGameOver() {
 
 function triggerGameOver() {
   isGameOver = true;
+  // 停止遊戲循環和物理引擎
+  app.ticker.remove(gameLoop);
+  if (runner) Runner.stop(runner);
+  // 完全停止 PixiJS 渲染器，閒置畫面不再消耗 GPU
+  app.ticker.stop();
   if (score > highScore) { highScore = score; localStorage.setItem('neonMergeHigh', highScore.toString()); }
   document.getElementById('final-score').textContent = score;
   document.getElementById('high-score').textContent = highScore;
@@ -795,6 +801,8 @@ function triggerGameOver() {
 }
 
 function restart() {
+  app.ticker.remove(gameLoop);
+  if (runner) Runner.stop(runner);
   document.getElementById('game-over').classList.add('hidden');
   document.getElementById('difficulty-select').classList.remove('hidden');
 }
