@@ -3,11 +3,11 @@
    ============================================ */
 
 import type Matter from 'matter-js';
-import { Sprite } from 'pixi.js';
+import { Graphics, Sprite } from 'pixi.js';
 import type { ShapeDef } from '@/data/types';
 import { COMBO_WINDOW_MS } from '@/data/config';
 import { PhysicsSystem } from './physics';
-import { getShapeTexture } from '@/rendering/textures';
+import { getShapeTexture, getBubbleTexture } from '@/rendering/textures';
 import type { ParticleSystem } from './particles';
 import type { AudioManager } from '@/audio/audio';
 import type { GameLayers } from '@/data/types';
@@ -28,6 +28,7 @@ export class MergeSystem {
     private readonly audio: AudioManager,
     private readonly layers: GameLayers,
     private readonly bodyGraphicsMap: Map<number, Sprite>,
+    private readonly bodyDebugCircles: Map<number, Sprite>,
     private readonly callbacks: MergeCallbacks,
   ) {}
 
@@ -71,6 +72,14 @@ export class MergeSystem {
       this.bodyGraphicsMap.delete(a.id);
       this.bodyGraphicsMap.delete(b.id);
 
+      // Remove debug circles
+      const dcA = this.bodyDebugCircles.get(a.id);
+      if (dcA) { this.layers.shapes.removeChild(dcA); dcA.destroy(); }
+      const dcB = this.bodyDebugCircles.get(b.id);
+      if (dcB) { this.layers.shapes.removeChild(dcB); dcB.destroy(); }
+      this.bodyDebugCircles.delete(a.id);
+      this.bodyDebugCircles.delete(b.id);
+
       // Score
       const gained = newLevel < this._shapes.length ? this._shapes[newLevel].score : 80;
       const scoreColor = newLevel < this._shapes.length ? this._shapes[newLevel].color : '#FFFFFF';
@@ -104,6 +113,13 @@ export class MergeSystem {
         ng.y = my;
         this.layers.shapes.addChild(ng);
         this.bodyGraphicsMap.set(newBody.id, ng);
+
+        // Debug circle for merged shape -> Bubble Sprite
+        const dc = new Sprite(getBubbleTexture(this._shapes[newLevel].color, this._shapes[newLevel].radius + 3));
+        dc.anchor.set(0.5);
+        dc.x = mx; dc.y = my;
+        this.layers.shapes.addChild(dc);
+        this.bodyDebugCircles.set(newBody.id, dc);
       }
 
       // Effects

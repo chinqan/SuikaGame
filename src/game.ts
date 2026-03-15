@@ -11,7 +11,7 @@ import {
 } from '@/data/config';
 import { InputManager } from '@/core/input';
 import { createLayers, mountLayers } from '@/rendering/layers';
-import { initTextures, getShapeTexture } from '@/rendering/textures';
+import { initTextures, getShapeTexture, getBubbleTexture } from '@/rendering/textures';
 import { applyViewportScale } from '@/rendering/viewport';
 import { PhysicsSystem } from '@/systems/physics';
 import { MergeSystem } from '@/systems/merge';
@@ -50,6 +50,7 @@ export class Game {
   private gameStartTime = 0;
 
   private readonly bodyGraphicsMap = new Map<number, Sprite>();
+  private readonly bodyDebugCircles = new Map<number, Sprite>();
 
   private readonly canvasW = DESIGN_W;
   private readonly canvasH = DESIGN_H;
@@ -96,7 +97,7 @@ export class Game {
     // Merge system (needs physics, particles, audio, layers)
     this.mergeSys = new MergeSystem(
       this.physics, this.particleSys, this.audio, this.layers,
-      this.bodyGraphicsMap,
+      this.bodyGraphicsMap, this.bodyDebugCircles,
       {
         onScoreAdd: (pts, color, x, y) => {
           this.score += pts;
@@ -159,6 +160,8 @@ export class Game {
     this.layers.shapes.removeChildren();
     this.bodyGraphicsMap.forEach(g => g.destroy());
     this.bodyGraphicsMap.clear();
+    this.bodyDebugCircles.forEach(g => g.destroy());
+    this.bodyDebugCircles.clear();
 
     // Clear particles
     this.particleSys.clearAll(false);
@@ -221,6 +224,12 @@ export class Game {
         g.y = body.position.y;
         g.rotation = body.angle;
       }
+      const dc = this.bodyDebugCircles.get(body.id);
+      if (dc) {
+        dc.x = body.position.x;
+        dc.y = body.position.y;
+        dc.rotation = body.angle;
+      }
     }
 
     // Update aim guide
@@ -249,6 +258,14 @@ export class Game {
     g.y = -shape.radius;
     this.layers.shapes.addChild(g);
     this.bodyGraphicsMap.set(body.id, g);
+
+    // Debug circle outline -> Bubble Sprite
+    const dc = new Sprite(getBubbleTexture(shape.color, shape.radius + 3));
+    dc.anchor.set(0.5);
+    dc.x = clampedX;
+    dc.y = -shape.radius;
+    this.layers.shapes.addChild(dc);
+    this.bodyDebugCircles.set(body.id, dc);
 
     this.audio.playDropSound();
     this.currentLevel = this.nextLevel;
@@ -296,6 +313,8 @@ export class Game {
     this.layers.shapes.removeChildren();
     this.bodyGraphicsMap.forEach(g => g.destroy());
     this.bodyGraphicsMap.clear();
+    this.bodyDebugCircles.forEach(g => g.destroy());
+    this.bodyDebugCircles.clear();
     this.particleSys.clearAll(true);
     this.aimGuide.destroy();
 

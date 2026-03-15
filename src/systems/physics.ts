@@ -83,7 +83,7 @@ export class PhysicsSystem {
   /** 建立形狀 body */
   createShapeBody(x: number, y: number, level: number, shapes: readonly ShapeDef[]): Matter.Body {
     const shape = shapes[level];
-    return Bodies.circle(x, y, shape.radius, {
+    return Bodies.circle(x, y, shape.radius + 3, {
       restitution: SHAPE_BODY_CONFIG.restitution,
       friction: SHAPE_BODY_CONFIG.friction,
       frictionStatic: SHAPE_BODY_CONFIG.frictionStatic,

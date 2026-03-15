@@ -15,6 +15,7 @@ let _shapeTexShapesRef: readonly ShapeDef[] | null = null;
 // ─── Particle Texture Caches ─────────────────
 const _dotTexCache = new Map<string, Texture>();
 const _ringTexCache = new Map<string, Texture>();
+const _bubbleTexCache = new Map<string, Texture>();
 let _glowTexture: Texture | null = null;
 
 /** 初始化 texture manager（綁定 app） */
@@ -82,6 +83,30 @@ export function getRingTexture(colorHex: string): Texture {
   return tex;
 }
 
+/** 取得氣泡 texture（快取） */
+export function getBubbleTexture(colorHex: string, radius: number): Texture {
+  const key = `${colorHex}_${radius}`;
+  if (_bubbleTexCache.has(key)) return _bubbleTexCache.get(key)!;
+
+  const pad = 4; // Add a small padding to prevent clipping
+  const totalRadius = radius + pad;
+  const g = new Graphics();
+  
+  // 半透明基底
+  g.circle(totalRadius, totalRadius, radius).fill({ color: hexToNum(colorHex), alpha: 0.15 });
+  // 邊框
+  g.circle(totalRadius, totalRadius, radius).stroke({ color: hexToNum(colorHex), width: 1, alpha: 0.2 });
+  
+  const size = totalRadius * 2;
+  const tex = _app!.renderer.generateTexture({
+    target: g,
+    frame: new Rectangle(0, 0, size, size),
+  });
+  g.destroy();
+  _bubbleTexCache.set(key, tex);
+  return tex;
+}
+
 /** 取得光暈 texture（格線流用） */
 export function getGlowTexture(): Texture {
   if (_glowTexture) return _glowTexture;
@@ -108,6 +133,8 @@ export function clearParticleTexCaches(): void {
   _dotTexCache.clear();
   for (const tex of _ringTexCache.values()) tex.destroy(true);
   _ringTexCache.clear();
+  for (const tex of _bubbleTexCache.values()) tex.destroy(true);
+  _bubbleTexCache.clear();
 }
 
 /** 清除所有 texture 快取 */
