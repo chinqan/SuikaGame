@@ -6,8 +6,7 @@
   <title>Neon Shape Merge</title>
   <meta name="description" content="Neon Shape Merge – 霓虹幾何合成益智遊戲">
   <link rel="stylesheet" href="style.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.13.0/dist/pixi.min.js"></script>
+
 </head>
 <body>
   <div id="game-wrapper">
@@ -72,15 +71,8 @@
     <!-- Leaderboard overlay -->
     <div id="leaderboard" class="hidden">
       <div class="overlay-content leaderboard-content">
-        <h1>🏆 LEADERBOARD</h1>
-        <div id="leaderboard-table-wrap">
-          <table id="leaderboard-table">
-            <thead>
-              <tr><th>#</th><th>ID</th><th>分數</th><th>難度</th><th>時間</th><th>日期</th></tr>
-            </thead>
-            <tbody id="leaderboard-body"></tbody>
-          </table>
-        </div>
+        <div class="lb-ribbon">🏆</div>
+        <div id="leaderboard-list"></div>
         <button id="leaderboard-close-btn">關閉</button>
       </div>
     </div>
@@ -101,6 +93,8 @@
               <option value="bomb">💥 炸彈聲</option>
               <option value="stone">🪨 堅硬石頭聲</option>
               <option value="cosmic">🌌 宇宙電波聲</option>
+              <option value="fighting">🥊 格鬥打擊音效</option>
+              <option value="shooting">🔫 射擊爆破音效</option>
             </select>
           </div>
           <div id="sound-preview-grid"></div>
@@ -111,6 +105,6 @@
     </div>
   </div>
 
-  <script src="game.js"></script>
+  <script type="module" src="/src/index.ts"></script>
 </body>
 </html>

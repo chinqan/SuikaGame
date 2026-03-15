@@ -7,7 +7,16 @@ const PORT = 7860;
 
 // Middleware
 app.use(express.json());
-app.use(express.static(path.join(__dirname)));
+
+// Serve Vite build output (run `npm run build` first)
+const distDir = path.join(__dirname, 'dist');
+const fs = require('fs');
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+} else {
+  console.warn('⚠️  dist/ 目錄不存在，請先執行 npm run build');
+  app.use(express.static(path.join(__dirname)));
+}
 
 // Database
 const db = new Database(path.join(__dirname, 'leaderboard.db'));
