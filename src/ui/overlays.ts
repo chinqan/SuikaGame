@@ -149,7 +149,8 @@ export class OverlayManager {
   private savedOverlayStates: string[] = [];
 
   private hideForegroundOverlays(): void {
-    this.savedOverlayStates = [];
+    // Don't overwrite if already saved (switching between leaderboard/settings)
+    if (this.savedOverlayStates.length > 0) return;
     const ids = ['difficulty-select', 'game-over'];
     for (const id of ids) {
       const el = document.getElementById(id);
