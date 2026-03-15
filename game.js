@@ -67,6 +67,49 @@ let bodyGraphicsMap = new Map(); // Matter body id -> PIXI.Graphics
 // Next preview & evo bar: 用主 app renderer 提取圖片，不再使用獨立 PIXI.Application
 let blurredBg = null; // PixiJS 模糊背景容器（取代 CSS backdrop-filter）
 
+// ─── Particle Texture Cache ──────────────────
+const _dotTexCache = new Map();   // key: colorHex -> Texture
+const _ringTexCache = new Map();  // key: colorHex -> Texture
+
+function getDotTexture(colorHex) {
+  if (_dotTexCache.has(colorHex)) return _dotTexCache.get(colorHex);
+  const sz = 8; // base radius for dot texture
+  const g = new PIXI.Graphics();
+  g.circle(sz, sz, sz).fill({ color: hexToNum(colorHex) });
+  const tex = app.renderer.generateTexture({
+    target: g,
+    frame: new PIXI.Rectangle(0, 0, sz * 2, sz * 2),
+  });
+  g.destroy();
+  _dotTexCache.set(colorHex, tex);
+  return tex;
+}
+
+function getRingTexture(colorHex) {
+  if (_ringTexCache.has(colorHex)) return _ringTexCache.get(colorHex);
+  const R = 5;
+  const g = new PIXI.Graphics();
+  g.circle(R + 4, R + 4, R).stroke({ color: hexToNum(colorHex), width: 4, alpha: 0.7 });
+  const pad = R + 6;
+  const tex = app.renderer.generateTexture({
+    target: g,
+    frame: new PIXI.Rectangle(0, 0, pad * 2, pad * 2),
+  });
+  g.destroy();
+  _ringTexCache.set(colorHex, tex);
+  return tex;
+}
+
+function clearParticleTexCaches() {
+  for (const tex of _dotTexCache.values()) tex.destroy(true);
+  _dotTexCache.clear();
+  for (const tex of _ringTexCache.values()) tex.destroy(true);
+  _ringTexCache.clear();
+}
+
+// ─── Floating Text Pool ──────────────────────
+const _floatingTextPool = [];
+
 // ─── PixiJS helpers ──────────────────────────
 function hexToNum(hex) {
   return parseInt(hex.slice(1), 16);
@@ -120,6 +163,43 @@ function drawNeonShape(g, shape, r, withGlow) {
   }
 }
 
+// ─── Shape Texture Cache（所有地方共用同一張圖）────
+const _shapeTexCache = new Map(); // key: "shapesId-level" → Texture
+let _shapeTexShapesRef = null;    // 用來偵測 SHAPES 是否變更
+
+function getShapeTexture(level) {
+  // SHAPES 變更時清除快取（切換難度）
+  if (_shapeTexShapesRef !== SHAPES) {
+    clearShapeTextureCache();
+    _shapeTexShapesRef = SHAPES;
+  }
+  if (_shapeTexCache.has(level)) return _shapeTexCache.get(level);
+
+  const shape = SHAPES[level];
+  const g = new PIXI.Graphics();
+  drawNeonShape(g, shape, shape.radius, true);
+  // glow 最大半徑 = r + 12，預留邊距
+  const pad = shape.radius + 16;
+  g.x = pad; g.y = pad;
+  // 包進 Container 確保 transform 正確套用到 generateTexture
+  const container = new PIXI.Container();
+  container.addChild(g);
+  const size = pad * 2;
+  const tex = app.renderer.generateTexture({
+    target: container,
+    frame: new PIXI.Rectangle(0, 0, size, size),
+  });
+  g.destroy();
+  container.destroy();
+  _shapeTexCache.set(level, tex);
+  return tex;
+}
+
+function clearShapeTextureCache() {
+  for (const tex of _shapeTexCache.values()) tex.destroy(true);
+  _shapeTexCache.clear();
+}
+
 // ─── Init ────────────────────────────────────
 async function init() {
   canvasW = DESIGN_W;
@@ -142,14 +222,17 @@ async function init() {
   app.canvas.style.width = canvasW + 'px';
   app.canvas.style.height = canvasH + 'px';
 
-  // Create layer containers
-  bgContainer = new PIXI.Container();
-  wallGlowContainer = new PIXI.Container();
+  // Create layer containers（靜態容器啟用 RenderGroup 以優化 GPU transform）
+  bgContainer = new PIXI.Container({ isRenderGroup: true });
+  wallGlowContainer = new PIXI.Container({ isRenderGroup: true });
   gameOverLineGfx = new PIXI.Graphics();
   shapesContainer = new PIXI.Container();
   particleContainer = new PIXI.Container();
   uiContainer = new PIXI.Container();
   aimGuideContainer = new PIXI.Container();
+
+  // 禁用事件遍歷（使用 DOM 事件處理輸入，不需要 PixiJS 事件）
+  app.stage.interactiveChildren = false;
 
   app.stage.addChild(bgContainer, wallGlowContainer, gameOverLineGfx,
     shapesContainer, particleContainer, uiContainer, aimGuideContainer);
@@ -231,12 +314,16 @@ function startGame() {
   shapesContainer.removeChildren();
   bodyGraphicsMap.forEach(g => g.destroy());
   bodyGraphicsMap.clear();
-  // Clear particles – 必須 destroy 釋放 PIXI/GPU 資源，不能只 removeChildren
+  // Clear particles – Sprite 使用共享 texture，不可 destroy(texture:true)
   for (const p of particles) { p.display.destroy(); }
   particles.length = 0;
   particleContainer.removeChildren();
-  // Clear floating texts – 同上
-  for (const ft of floatingTexts) { ft.display.destroy(); }
+  // Clear floating texts – 歸還物件池而非 destroy
+  for (const ft of floatingTexts) {
+    ft.display.visible = false;
+    uiContainer.removeChild(ft.display);
+    _floatingTextPool.push(ft.display);
+  }
   floatingTexts.length = 0;
   uiContainer.removeChildren();
 
@@ -324,9 +411,9 @@ function dropShape(x) {
   bodyLevelMap.set(body.id, level);
   Composite.add(engine.world, body);
 
-  // Create PixiJS graphics for this body
-  const g = new PIXI.Graphics();
-  drawNeonShape(g, shape, shape.radius, true);
+  // Create PixiJS sprite for this body（共用 texture cache）
+  const g = new PIXI.Sprite(getShapeTexture(level));
+  g.anchor.set(0.5);
   g.x = x;
   g.y = -shape.radius;
   shapesContainer.addChild(g);
@@ -387,8 +474,8 @@ function onCollision(event) {
       bodyLevelMap.set(newBody.id, newLevel);
       Composite.add(engine.world, newBody);
       Body.setVelocity(newBody, { x: (Math.random() - 0.5) * 1.5, y: -1.5 });
-      const ng = new PIXI.Graphics();
-      drawNeonShape(ng, SHAPES[newLevel], SHAPES[newLevel].radius, true);
+      const ng = new PIXI.Sprite(getShapeTexture(newLevel));
+      ng.anchor.set(0.5);
       ng.x = mx; ng.y = my;
       shapesContainer.addChild(ng);
       bodyGraphicsMap.set(newBody.id, ng);
@@ -400,16 +487,27 @@ function onCollision(event) {
   }
 }
 
-// ─── Floating text ───────────────────────────
+// ─── Floating text（物件池）────────────────────
 function spawnFloatingText(x, y, text, color, comboNum) {
   const fontSize = comboNum ? (28 + comboNum * 4) : 22;
-  const t = new PIXI.Text({
-    text, style: {
-      fontFamily: 'Orbitron, sans-serif', fontSize, fontWeight: 'bold',
-      fill: color, align: 'center',
-    }
-  });
-  t.anchor.set(0.5);
+  let t;
+  if (_floatingTextPool.length > 0) {
+    // 重用物件池中的 Text
+    t = _floatingTextPool.pop();
+    t.text = text;
+    t.style.fontSize = fontSize;
+    t.style.fill = color;
+    t.visible = true;
+    t.alpha = 1;
+  } else {
+    t = new PIXI.Text({
+      text, style: {
+        fontFamily: 'Orbitron, sans-serif', fontSize, fontWeight: 'bold',
+        fill: color, align: 'center',
+      }
+    });
+    t.anchor.set(0.5);
+  }
   t.x = x; t.y = y;
   t.scale.set(0.5);
   uiContainer.addChild(t);
@@ -420,47 +518,48 @@ function spawnFloatingText(x, y, text, color, comboNum) {
   });
 }
 
-// ─── Particle System ─────────────────────────
+// ─── Particle System（Sprite 化 + Texture 快取）─────
 function spawnMergeParticles(x, y, level) {
   const shape = SHAPES[level];
-  const color = hexToNum(shape.color);
 
-  // Ring — 畫一次固定大小，之後用 scale 放大（避免 PixiJS v8 clear/redraw 洩漏）
+  // Ring — 用預建 ring texture + Sprite，scale 動畫放大
   const ringBaseR = 5;
-  const ring = new PIXI.Graphics();
-  ring.circle(0, 0, ringBaseR).stroke({ color: hexToNum(shape.color), width: 4, alpha: 0.7 });
+  const ring = new PIXI.Sprite(getRingTexture(shape.color));
+  ring.anchor.set(0.5);
   ring.x = x; ring.y = y;
   particleContainer.addChild(ring);
   particles.push({ type: 'ring', display: ring, radius: ringBaseR, baseRadius: ringBaseR, maxRadius: shape.radius * 3.5, life: 1, decay: 0.04, color: shape.color, lineWidth: 4 });
 
-  // Shards
+  // Shards — 用共享的 shape texture（已有 getShapeTexture 快取）
   const shardCount = 8 + level * 2;
   for (let i = 0; i < shardCount; i++) {
     const angle = (Math.PI * 2 * i) / shardCount + (Math.random() - 0.5) * 0.4;
     const speed = 3 + Math.random() * 6;
-    const g = new PIXI.Graphics();
     const sc = 0.18 + Math.random() * 0.15;
-    drawNeonShape(g, shape, shape.radius, false);
-    g.x = x; g.y = y; g.scale.set(sc); g.rotation = Math.random() * Math.PI * 2;
-    particleContainer.addChild(g);
+    const s = new PIXI.Sprite(getShapeTexture(level));
+    s.anchor.set(0.5);
+    s.x = x; s.y = y; s.scale.set(sc); s.rotation = Math.random() * Math.PI * 2;
+    particleContainer.addChild(s);
     particles.push({
-      type: 'shard', display: g, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 2,
+      type: 'shard', display: s, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 2,
       life: 1, decay: 0.012 + Math.random() * 0.015, rotSpeed: (Math.random() - 0.5) * 0.3, initScale: sc
     });
   }
 
-  // Dots
+  // Dots — 用預建 dot texture + Sprite
   const dotCount = 16 + level * 3;
+  const dotTex = getDotTexture(shape.color);
   for (let i = 0; i < dotCount; i++) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 2 + Math.random() * 7;
     const sz = 2 + Math.random() * 5;
-    const g = new PIXI.Graphics();
-    g.circle(0, 0, sz).fill({ color });
-    g.x = x; g.y = y;
-    particleContainer.addChild(g);
+    const s = new PIXI.Sprite(dotTex);
+    s.anchor.set(0.5);
+    s.scale.set(sz / 8); // 8 = dot texture base radius
+    s.x = x; s.y = y;
+    particleContainer.addChild(s);
     particles.push({
-      type: 'dot', display: g, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 2,
+      type: 'dot', display: s, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 2,
       life: 1, decay: 0.015 + Math.random() * 0.02
     });
   }
@@ -494,7 +593,7 @@ function updateParticles() {
   for (let i = floatingTexts.length - 1; i >= 0; i--) {
     const ft = floatingTexts[i];
     ft.life -= ft.decay;
-    if (ft.life <= 0) { uiContainer.removeChild(ft.display); ft.display.destroy(); floatingTexts[i] = floatingTexts[floatingTexts.length - 1]; floatingTexts.pop(); continue; }
+    if (ft.life <= 0) { uiContainer.removeChild(ft.display); ft.display.visible = false; _floatingTextPool.push(ft.display); floatingTexts[i] = floatingTexts[floatingTexts.length - 1]; floatingTexts.pop(); continue; }
     ft.display.y += ft.vy;
     ft.vy *= 0.97;
     ft.display.alpha = ft.life;
@@ -721,14 +820,13 @@ function drawNextPreview() {
   const shape = SHAPES[nextLevel];
   const scale = 28 / shape.radius;
 
-  // 在臨時 container 中渲染形狀
+  // 用共享 texture 建立 Sprite
+  const sprite = new PIXI.Sprite(getShapeTexture(nextLevel));
+  sprite.anchor.set(0.5);
+  sprite.x = 40; sprite.y = 40; sprite.scale.set(scale);
   const tmp = new PIXI.Container();
-  const g = new PIXI.Graphics();
-  drawNeonShape(g, shape, shape.radius, true);
-  g.x = 40; g.y = 40; g.scale.set(scale);
-  tmp.addChild(g);
+  tmp.addChild(sprite);
 
-  // 用主 renderer 提取為 canvas
   const tex = app.renderer.generateTexture({
     target: tmp,
     frame: new PIXI.Rectangle(0, 0, 80, 80),
@@ -740,8 +838,7 @@ function drawNextPreview() {
   canvas.style.border = '1px solid rgba(255,255,255,0.1)';
   nc.appendChild(canvas);
 
-  // 清理臨時物件
-  g.destroy();
+  sprite.destroy();
   tmp.destroy();
   tex.destroy(true);
 }
@@ -764,7 +861,7 @@ function drawEvolutionBar() {
   const totalDiameters = diameters.reduce((sum, d) => sum + d, 0);
   const slotScale = w / totalDiameters;
 
-  // 在臨時 container 中渲染所有形狀
+  // 用共享 texture 建立 Sprites
   const tmp = new PIXI.Container();
   let curX = 0;
   for (let i = 0; i < count; i++) {
@@ -774,10 +871,10 @@ function drawEvolutionBar() {
     const x = curX + slotW / 2;
     const y = h / 2;
     const scale = displayR / shape.radius;
-    const g = new PIXI.Graphics();
-    drawNeonShape(g, shape, shape.radius, true);
-    g.x = x; g.y = y; g.scale.set(scale);
-    tmp.addChild(g);
+    const s = new PIXI.Sprite(getShapeTexture(i));
+    s.anchor.set(0.5);
+    s.x = x; s.y = y; s.scale.set(scale);
+    tmp.addChild(s);
     curX += slotW;
   }
 
@@ -885,8 +982,11 @@ function triggerGameOver() {
   for (const p of particles) { p.display.destroy(); }
   particles.length = 0;
   particleContainer.removeChildren();
+  // triggerGameOver 時真正 destroy 全部浮動文字和物件池（遊戲結束不需保留）
   for (const ft of floatingTexts) { ft.display.destroy(); }
   floatingTexts.length = 0;
+  for (const t of _floatingTextPool) { t.destroy(); }
+  _floatingTextPool.length = 0;
   uiContainer.removeChildren();
   for (const f of gridFlows) { bgContainer.removeChild(f.sprite); f.sprite.destroy(); }
   gridFlows.length = 0;
@@ -1298,9 +1398,9 @@ function playMergeSoundCosmic(level) {
   autoDisconnect(padO, padDur); autoDisconnect(padG, padDur);
   const statDur = 0.15 + level * 0.02;
   const statSz = Math.floor(audioCtx.sampleRate * statDur);
-  const statBuf = audioCtx.createBuffer(1, statSz, audioCtx.sampleRate);
-  const statData = statBuf.getChannelData(0);
-  for (let i = 0; i < statSz; i++) statData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / statSz, 6);
+  const statBuf = getNoiseBuffer(`cosmic_stat_${level}`, statSz, (d, n) => {
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 6);
+  });
   const statSrc = audioCtx.createBufferSource(); statSrc.buffer = statBuf;
   const statG = audioCtx.createGain();
   statG.gain.setValueAtTime(0.06 * intensity, t + 0.01);
@@ -1368,13 +1468,13 @@ function buildSoundPreviewGrid() {
     btn.style.color = shape.color;
     btn.style.boxShadow = `0 0 12px ${hexToRGBA(shape.color, 0.15)}, inset 0 0 12px ${hexToRGBA(shape.color, 0.08)}`;
 
-    // 用主 PixiJS renderer 渲染形狀，取代 Canvas2D
-    const tmp = new PIXI.Container();
-    const g = new PIXI.Graphics();
+    // 用共享 texture 建立形狀圖片
+    const sprite = new PIXI.Sprite(getShapeTexture(level));
+    sprite.anchor.set(0.5);
     const scale = 18 / shape.radius;
-    drawNeonShape(g, shape, shape.radius, true);
-    g.x = 24; g.y = 24; g.scale.set(scale);
-    tmp.addChild(g);
+    sprite.x = 24; sprite.y = 24; sprite.scale.set(scale);
+    const tmp = new PIXI.Container();
+    tmp.addChild(sprite);
     const tex = app.renderer.generateTexture({
       target: tmp,
       frame: new PIXI.Rectangle(0, 0, 48, 48),
@@ -1382,7 +1482,7 @@ function buildSoundPreviewGrid() {
     const miniCanvas = app.renderer.extract.canvas(new PIXI.Sprite(tex));
     miniCanvas.style.width = '48px';
     miniCanvas.style.height = '48px';
-    g.destroy(); tmp.destroy(); tex.destroy(true);
+    sprite.destroy(); tmp.destroy(); tex.destroy(true);
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'shape-name'; nameSpan.textContent = shape.name;
