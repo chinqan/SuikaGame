@@ -22,7 +22,7 @@ html, body {
   user-select: none;
   display: flex;
   justify-content: center;
-  align-items: flex-start;
+  align-items: center;
 }
 
 /* ---------- Game Wrapper ---------- */

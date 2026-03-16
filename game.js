@@ -214,7 +214,7 @@ async function init() {
     height: canvasH,
     backgroundColor: 0x0a0a0f,
     antialias: true,
-    resolution: 1,
+    resolution: window.devicePixelRatio || 1,
     autoDensity: true,
   });
   const container = document.getElementById('game-canvas-container');
@@ -381,9 +381,9 @@ function onResize() {
   const naturalH = wrapper.offsetHeight;
   const scaleX = viewW / naturalW;
   const scaleY = viewH / naturalH;
-  const scale = Math.min(scaleX, scaleY, 1); // never upscale beyond 1
+  const scale = Math.min(scaleX, scaleY); // allow upscale to fill viewport
   wrapper.style.transform = `scale(${scale})`;
-  wrapper.style.transformOrigin = 'top center';
+  wrapper.style.transformOrigin = 'center center';
 }
 
 // ─── Walls ───────────────────────────────────
@@ -721,7 +721,7 @@ function getGlowTexture() {
   g.circle(R, R, R * 0.45).fill({ color: 0x88ffff, alpha: 0.45 });
   // 核心亮白點
   g.circle(R, R, R * 0.25).fill({ color: 0xffffff, alpha: 1.0 });
-  _glowTexture = app.renderer.generateTexture({ target: g, resolution: 1 });
+  _glowTexture = app.renderer.generateTexture({ target: g, resolution: window.devicePixelRatio || 1 });
   g.destroy();
   return _glowTexture;
 }
