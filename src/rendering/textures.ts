@@ -116,7 +116,7 @@ export function getGlowTexture(): Texture {
   g.circle(R, R, R * 0.7).fill({ color: 0x00ffff, alpha: 0.18 });
   g.circle(R, R, R * 0.45).fill({ color: 0x88ffff, alpha: 0.45 });
   g.circle(R, R, R * 0.25).fill({ color: 0xffffff, alpha: 1.0 });
-  _glowTexture = _app!.renderer.generateTexture({ target: g, resolution: 1 });
+  _glowTexture = _app!.renderer.generateTexture({ target: g, resolution: Math.min(window.devicePixelRatio || 1, 2) });
   g.destroy();
   return _glowTexture;
 }

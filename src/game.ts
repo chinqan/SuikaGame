@@ -68,8 +68,9 @@ export class Game {
       height: this.canvasH,
       backgroundColor: 0x0a0a0f,
       antialias: true,
-      resolution: 1,
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
+      powerPreference: 'high-performance',
     });
 
     const container = document.getElementById('game-canvas-container')!;
