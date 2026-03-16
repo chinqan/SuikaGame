@@ -71,6 +71,8 @@ export class Game {
       resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
       powerPreference: 'high-performance',
+      preference: 'webgl',
+      clearBeforeRender: true,
     });
 
     const container = document.getElementById('game-canvas-container')!;

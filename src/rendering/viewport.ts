@@ -17,6 +17,6 @@ export function applyViewportScale(): void {
 
   const scale = viewH / naturalH; // Force height to 100% of viewport
 
-  wrapper.style.transform = `scale(${scale})`;
+  wrapper.style.transform = `scale(${scale}) translateZ(0)`;
   wrapper.style.transformOrigin = 'center center';
 }
