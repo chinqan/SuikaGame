@@ -866,6 +866,15 @@ When implementing dev tools and UI:
 4. **Lifecycle strictness**: Explicit dispose, ref counting, or scene-based?
 5. **Keybind approach**: Presets, JSON edit, or press-to-bind?
 
+## Additional Resources
+
+> 以下資源檔案在需要時才讀取，不會自動載入上下文。
+
+| 資源 | 路徑 | 內容 |
+|------|------|------|
+| API 速查 | `resources/api-reference.md` | GC 配置、Texture 生命週期、BitmapText、BlendModes、Events 優化、Scene Graph |
+| 文件索引 | `resources/docs-index.md` | PixiJS v8 官方文件 56 個連結索引 |
+
 ---
 
 ## Related Skills
