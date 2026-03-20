@@ -11,128 +11,103 @@ description: 物理落下益智遊戲的 UI/UX 設計師。負責 HUD 版面、O
 
 ## When to Use
 
-- 設計/修改 HUD（分數、NEXT 預覽、功能按鈕）
-- 新增/調整 Overlay 彈窗（難度選擇、Game Over、排行榜、設定）
-- 建立或更新 Design Token 系統（顏色、字型、間距、動畫）
-- 無障礙設計審查（WCAG 對比度、觸控目標、reduced-motion）
-- 定義元件的完整互動狀態（Default/Hover/Active/Focus/Disabled）
+- 設計/修改 HUD（分數、預覽、功能按鈕）
+- 新增/調整 Overlay 彈窗
+- 建立或更新 Design Token 系統
+- 無障礙設計審查
+- 定義元件的完整互動狀態
 - 設計 Loading / Error / Empty 狀態
 
 ---
 
-## 🚨 Critical Rules（不可違反）
+## 品質標準
 
-- **UI 元素的渲染層級必須明確記錄** — HTML DOM / PixiJS Canvas / 混合（如 NEXT 預覽用 PixiJS 轉 HTML Canvas）
-- **Overlay 互動狀態必須完整定義** — 開啟時隱藏誰、關閉時恢復誰、互切時的行為
-- **縮放策略必須精確記錄** — 不能只寫「等比縮放」，要寫 scale 公式
+### UI 規格完整性
+
+- **每個 UI 元素必須標明渲染層級** — 是 HTML DOM、PixiJS Canvas、還是混合方式
+  - 範例：「NEXT 預覽使用 PixiJS 渲染後轉為 HTML Canvas 嵌入 DOM」
+- **z-index 必須有完整層級表** — 避免 Overlay 互相遮蓋
+- **Overlay 互動的狀態流必須定義** — 開啟時隱藏誰、關閉時恢復誰、互切時怎麼處理
+
+### 縮放策略
+
+- **縮放公式必須精確記錄** — 不能只寫「等比縮放」，要寫出 scale 的計算方式
+  - 範例：`scale = viewH / naturalH`（純高度對齊）vs `scale = min(viewW/W, viewH/H)`（等比取小）
+- 記錄 transformOrigin 和 GPU 加速技巧
+
+### Design Token 的一致性
+
+- Token 命名遵循語意化原則（`--color-accent` 而非 `--color-cyan`）
+- 所有 UI 元件引用 Token，不使用 hardcoded 值
 
 ---
 
-此類遊戲使用**雙層 UI**：
+## 雙層 UI 架構撰寫指南
 
-| 層級 | 技術 | 內容 | 優勢 |
-|------|------|------|------|
-| **HTML/CSS 層** | DOM | HUD、Overlay 彈窗、設定 | 易佈局、無障礙支援好 |
-| **Canvas 層** | PixiJS | 浮動分數、COMBO、瞄準線 | 可隨畫面震動、可用 blend mode |
+此類遊戲通常使用雙層 UI：
 
-**規則**：
-- HUD 靠 HTML 做（好改、好 debug）
-- 遊戲內即時回饋靠 Canvas 做（可跟著物理動）
-- z-index 規劃：HUD 按鈕 > 設定/排行榜 > 難度選擇 > Game Over > 遊戲畫面
+| 層級 | 技術 | 適合放什麼 | 優勢 |
+|------|------|-----------|------|
+| **HTML/CSS** | DOM | HUD、Overlay、設定面板 | 佈局靈活、無障礙支援好、好 debug |
+| **Canvas** | PixiJS / WebGL | 浮動文字、粒子、瞄準線 | 可用 Blend Mode、可隨物理震動 |
+
+> **決策原則**：如果 UI 元素需要跟隨物理世界動→ Canvas。如果是靜態佈局→ HTML。
 
 ---
 
-## Design Token 系統
-
-### 顏色 Token
+## Design Token 撰寫模板
 
 ```css
 :root {
   /* 背景 */
-  --color-bg-primary: #0a0a0f;
-  --color-bg-secondary: #0d0d1a;
-  --color-bg-surface: #0f0f23;
+  --color-bg-primary: [近黑色];
+  --color-bg-secondary: [次要深色];
+  --color-bg-surface: [面板背景];
 
   /* 語意色 */
-  --color-accent: #00FFFF;       /* 主強調（牆壁、分數、按鈕） */
-  --color-danger: #FF3131;       /* 危險（Game Over、Hard） */
-  --color-success: #39FF14;      /* 正向（Easy） */
-  --color-gold: #FFD700;         /* 獎勵（COMBO、排行榜） */
-  --color-settings: #AAAAFF;     /* 設定介面 */
+  --color-accent: [主強調色];
+  --color-danger: [危險/錯誤];
+  --color-success: [正向/成功];
+  --color-gold: [獎勵/高亮];
 
-  /* 文字 */
-  --color-text-primary: #FFFFFF;
-  --color-text-muted: rgba(255,255,255,0.4);
+  /* 字型 */
+  --font-display: [科技感字型];
+  --font-body: [可讀性字型];
+
+  /* 動畫 */
+  --transition-fast: [按鈕 hover];
+  --transition-normal: [Overlay 過渡];
 }
 ```
 
-### 字型 Token
-
-```css
-:root {
-  --font-display: 'Orbitron', sans-serif;   /* 科技感標題 */
-  --font-body: 'Rajdhani', sans-serif;      /* 可讀性內文 */
-
-  --font-size-score: 48px;
-  --font-size-title: 36px;
-  --font-size-subtitle: 28px;
-  --font-size-button: 22px;
-  --font-size-label: 16px;
-  --font-size-small: 13px;
-}
-```
-
-### 動畫 Token
-
-```css
-:root {
-  --transition-fast: 0.25s ease;    /* 按鈕 hover */
-  --transition-normal: 0.3s ease;   /* Overlay 出現 */
-  --transition-slow: 0.5s ease;     /* 場景轉換 */
-}
-```
+> **原則**：Token 名稱使用語意化命名，不用視覺描述（用 `--color-accent` 而非 `--color-cyan`）。
 
 ---
 
-## Overlay 設計規範
+## Overlay 設計撰寫指南
 
 ### 通用規則
 
-- **遮罩**：PixiJS BlurFilter（strength=6）+ 半透明黑色覆蓋（alpha=0.65）
-- **佈局**：`position: absolute; inset: 0;` 佔滿 game-wrapper
-- **動畫**：使用 `--transition-normal` 淡入
+- **遮罩效果** — 模糊背景 + 半透明暗色覆蓋，讓焦點集中在 Overlay 內容
+- **佈局** — 全畫面覆蓋，內容居中
+- **狀態保存** — 開啟子面板時，記錄並隱藏當前可見的父 Overlay，關閉後恢復
 
-### 必要的 Overlay 清單
+### Overlay 清單模板
 
-| Overlay | z-index | 觸發時機 |
-|---------|---------|---------|
-| 難度選擇 | 200 | 遊戲啟動 / 重新挑戰 |
-| Game Over | 100 | 形狀超過 Game Over 線 |
-| 排行榜 | 300 | 點擊 🏆 按鈕 |
-| 設定 | 300 | 點擊 ⚙️ 按鈕 |
+| Overlay | z-index | 觸發時機 | 關閉方式 |
+|---------|---------|---------|---------|
+| ... | ... | ... | ... |
 
 ---
 
-## 無障礙設計（Accessibility）規範
+## 無障礙設計 Checklist
 
-### 色彩對比度
-
-- **WCAG AA 標準**：普通文字 ≥ 4.5:1，大文字 ≥ 3:1
-- 霓虹色在深黑背景上通常達標，但需逐一驗證
-- **特別注意**：次要標籤文字（alpha=0.4 白色）可能在邊界
-
-### 觸控目標
-
-- **最小 44×44px**（Apple HIG / WCAG 2.5.5）
-- HUD 按鈕（排行榜、設定）若太小，加大 `padding` 至 44px
-
-### 其他
-
-| 項目 | 建議 |
-|------|------|
-| `prefers-reduced-motion` | 尊重系統設定，可關閉粒子/震動 |
-| 鍵盤操作 | 方向鍵控制落點 + Space 投放 |
-| 色弱模式 | 形狀以「幾何形態」區分，不完全依賴顏色 |
+| 項目 | 標準 | 如何驗證 |
+|------|------|---------|
+| 色彩對比度 | WCAG AA ≥ 4.5:1 | 逐色驗證前景/背景組合 |
+| 觸控目標 | ≥ 44×44px | 檢查所有按鈕的 padding |
+| `prefers-reduced-motion` | 尊重系統設定 | 可關閉粒子/震動 |
+| 色弱友好 | 不完全依賴顏色區分 | 幾何形態作為輔助視覺線索 |
 
 ---
 
@@ -141,30 +116,23 @@ description: 物理落下益智遊戲的 UI/UX 設計師。負責 HUD 版面、O
 ```markdown
 | 元件 | Default | Hover | Active | Focus | Disabled |
 |------|---------|-------|--------|-------|----------|
-| 按鈕 | 邊框色  | scale + glow + bg% | scale(0.95) | outline | opacity 0.5 |
-| 輸入框 | 邊框 40% | - | - | 邊框 100% + glow | - |
-| 選單項 | 無背景 | bg 10% | - | - | - |
+| 按鈕 | [樣式] | [樣式] | [樣式] | [樣式] | [樣式] |
+| 輸入框 | [樣式] | [樣式] | [樣式] | [樣式] | [樣式] |
 ```
 
+> **品質標準**：每個互動元件至少定義 Default + Hover + Active 三態。
+
 ---
 
-## UI 狀態設計
+## UI 三態設計撰寫指南
 
-### 必要的 3 種狀態
+每個需要非同步數據的 UI 區域，必須定義：
 
 | 狀態 | 何時出現 | 顯示什麼 |
-|------|---------|---------|
-| **Loading** | 排行榜資料讀取中 | 載入指示文字/動畫 |
-| **Error** | 網路請求失敗 | 錯誤訊息 + 重試選項 |
-| **Empty** | 排行榜無資料 | 「尚無記錄」提示 |
-
----
-
-## 響應式縮放
-
-- **方法**：CSS `transform: scale()` 等比縮放整個 game-wrapper
-- **設計尺寸**：固定 546×779，不做流式佈局
-- **觸發**：`window.resize` + 初始化
+|------|---------|---------| 
+| **Loading** | 數據讀取中 | 載入動畫或文字 |
+| **Error** | 請求失敗 | 錯誤訊息 + 重試/忽略選項 |
+| **Empty** | 數據為空 | 引導性提示 |
 
 ---
 

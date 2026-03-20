@@ -5,204 +5,196 @@ description: 物理落下益智遊戲的技術美術師。負責 PixiJS 渲染�
 
 # 物理落下益智遊戲 — 技術美術師
 
-**職能**：橋接美術需求與引擎效能——管理 PixiJS 渲染管線、Texture 快取、粒子預算、Object Pool。
+**職能**：設計渲染管線、Texture 快取策略、粒子系統效能、Object Pool、物理引擎整合規範。
 
 ---
 
 ## When to Use
 
-- 新增/優化粒子特效（合成爆炸、格線光流）
-- 管理 Texture 記憶體與快取策略
-- 設計 Object Pool 規格
-- 優化行動裝置渲染效能
-- 整合或調整 Matter.js 物理引擎參數
-- 排查 GPU/CPU 效能瓶頸
+- 設計或審查渲染管線效能
+- 定義 Texture 快取策略
+- 設計粒子系統規格
+- 規劃 Object Pool 架構
+- 撰寫物理引擎整合規格
+- 解決跨平台效能或相容性問題
 
 ---
 
-## 🚨 Critical Rules（不可違反）
+## 品質標準
 
-### Texture 繪製規格必須文件化
+### Texture 規格的可還原性
 
-- **程式生成的 Texture 必須定義每一層的半徑、alpha、顏色** — 確保任何人都能從規格還原完全相同的 Texture
-- **Texture 基底尺寸必須明確記錄** — 因為 Sprite scale 依賴此尺寸（例如 `scale = size / baseSize`）
-- **Texture 快取 key 格式必須定義** — 不能只說「有快取」，要說清 key 的命名規則
+- **程式生成的 Texture 必須完整定義每一層** — 尺寸、顏色、alpha，讓人能完全還原視覺結果
+  - 範例：「Glow Texture = 由外到內 4 層，第一層 R=32px alpha=0.08，最後一層 R=8px alpha=1.0 白色」
+- **繪製順序必須記錄** — 「由外到內」和「由內到外」產生不同結果
+- **快取策略必須定義 Key 格式和清除時機**
 
-### 數據結構必須定義
+### 物理引擎參數完整記錄
 
-- **粒子、光流等動態物件的數據結構（interface）必須完整定義** — 不能只寫「有速度和位置」
-- **每個欄位的取值範圍和生成規則必須記錄** — 例如 `speed: 0.001~0.003`、`lineIdx: 1~hLines`
+- 所有物理配置常數**必須完整列出** — 不可只列「重要的幾個」
+- **建議標註程式碼中的常數名稱和檔案位置** — 方便工程師查找
+  - 範例：記錄分為「引擎全域參數」和「形狀 Body 參數」兩組
+- **每個參數附帶簡短說明** — 解釋它對遊戲手感的影響
 
-### 狀態轉變時的行為必須定義
+### 狀態轉換行為必須定義
 
-- **Game Over、暫停、重開等狀態下，每個視覺系統的行為必須明確** — 停止生成？繼續更新？立即清除？
-- **clearAll() 的行為必須分類記錄** — 哪些立即銷毀、哪些釋放回 Pool
-
----
-
-## 技術架構概覽
-
-```
-PixiJS 8 (WebGPU preferred → WebGL fallback)
-  ├── Application (546×779 設計解析度)
-  ├── Container 層級 (7 層 z-order)
-  ├── Graphics (形狀繪製 + Texture 快取)
-  └── Sprite (粒子效果)
-
-Matter.js (物理引擎)
-  ├── Engine (60Hz fixedUpdate)
-  ├── Bodies (圓形碰撞體)
-  ├── Walls (靜態邊界)
-  └── Events.on('collisionStart') → 合成判定
-```
+- Texture / 粒子 / Object Pool 在**狀態轉換中的行為**必須明確
+  - Game Over 時：停止生成？現有物件怎麼處理？
+  - 難度切換時：Texture 快取是否重建？
+  - 長時間運行時：記憶體是否持續增長？
 
 ---
 
-## Texture 快取策略
+## 渲染引擎初始化撰寫指南
 
-### 規範
+### 定義模板
 
-```typescript
-const textureKey = `shape_${level}_${difficulty}`;
-
-// 快取流程
-if (textureCache.has(textureKey)) {
-  return textureCache.get(textureKey);
-}
-// 繪製 Graphics → generateTexture → 快取
-const texture = app.renderer.generateTexture(graphics);
-textureCache.set(textureKey, texture);
+```markdown
+| 參數 | 值 | 說明 |
+|------|-----|------|
+| width / height | [設計尺寸] | 畫布固定尺寸 |
+| backgroundColor | [顏色值] | 背景色 |
+| antialias | true/false | 抗鋸齒 |
+| resolution | [公式] | 像素密度 |
+| preference | [渲染後端] | 優先使用的 API |
+| powerPreference | [值] | GPU 模式 |
 ```
 
-### 規則
+### 撰寫原則
 
-- **每個等級×難度** 生成一次 Texture，後續用 Sprite 複製
-- Graphics 繪製僅在首次需要時執行
-- Texture 生命週期 = 整個 session
-- 難度切換時清除舊快取、重新生成
+- **resolution 限制最高 2×** — 超過在行動裝置上爆記憶體
+- **渲染後端優先序** — 例：WebGPU → WebGL2 → 降級
+- **提到 autoDensity** — 是否自動跟隨裝置像素密度
 
 ---
 
-## 粒子效果效能預算
+## Texture 快取撰寫指南
 
-### 合成粒子（Merge Particles）
+### 快取策略模板
 
-每次合成噴出 3 種粒子：
+```markdown
+| Texture 類型 | 快取 Key | 清除時機 | 尺寸估算 |
+|-------------|---------|---------|---------|
+| [類型] | [Key 格式] | [何時清除] | [每個多少 bytes] |
+```
 
-| 類型 | 數量/次 | 生命週期 | Blend Mode |
-|------|---------|---------|-----------|
-| Ring | 1 | ~0.3s | Normal |
-| Shard（碎片） | 12-18 | ~0.5s | Additive |
-| Dot（光點） | 8-12 | ~0.4s | Additive |
+### 撰寫原則
 
-### 平台預算
+- **Key 格式決定快取命中率** — 例：顏色 Hex 作 Key、顏色+半徑作 Key
+- **清除時機要準確** — 難度切換時必須重建等
+- 列出 **`clearAll` 和 `clearPartial` 兩種** — 分別用於完整重置和部分重建
 
-| 指標 | 桌機 | 行動裝置 |
-|------|------|---------|
-| 最大同時粒子數 | 500 | 200 |
-| 最大格線光流 | 20 | 20 |
-| Overdraw 層數 | 不限 | ≤ 3 |
-| 粒子 GPU 預算 | < 2ms/幀 | < 1ms/幀 |
+---
+
+## 粒子系統撰寫指南
+
+### 粒子效果定義模板
+
+每種粒子效果使用以下結構：
+
+```markdown
+## 粒子：[名稱]
+
+| 屬性 | 值/公式 | 說明 |
+|------|---------|------|
+| 數量 | [數量公式] | 隨等級增加? |
+| 速度 | [速度範圍] | 隨機範圍 |
+| 衰減 | [decay 範圍] | 消失速度 |
+| 重力 | [是否受重力] | vy 每幀增加量 |
+| Texture | [使用哪個 Texture] | 快取產生的 |
+
+**生命週期**：life 從 1.0 開始，每幀減去 decay，≤ 0 時回收至 Pool
+```
+
+### 效能預算模板
+
+```markdown
+| 指標 | 桌機 | 行動裝置 | 說明 |
+|------|------|---------|------|
+| 最大同時粒子數 | [N] | [M] | 含所有類型 |
+| GPU 時間上限 | [ms] | [ms] | DevTools 測量 |
+| Texture 記憶體上限 | [MB] | [MB] | 所有粒子 Texture 加總 |
+```
 
 ### 效能保護機制
 
-- Object Pool 回收（不 new/destroy）
-- `life` 屬性遞減 → 自動回收
-- 硬上限：`maxCount` 限制同時存在數量
-- 離開視口的粒子立即回收
+定義超出預算時的降級策略：
+
+| 機制 | 策略 |
+|------|------|
+| 粒子超量 | 優先移除最舊 / 強制 life=0 |
+| Texture 超量 | 清除低頻使用的快取 |
+| Object Pool | 定義 prewarm 數量和最大容量 |
 
 ---
 
-## Object Pool 設計
+## 物理引擎整合撰寫指南
 
-### Pool 規範模板
+### 參數定義模板
+
+將物理參數分組記錄：
 
 ```markdown
-## Pool: [名稱]
-
-**物件類型**：Sprite / Graphics / ...
-**預熱數量**：N 個
-**最大數量**：M 個
-**acquire()** 行為：visible=true, alpha=1, position 重置
-**release()** 行為：visible=false, 移出視口
-**永不在遊戲中 destroy()**
-```
-
-### 本專案的 Pool
-
-| Pool | 對象 | 預熱 | 上限 |
-|------|------|------|------|
-| shapePool | Shape Graphics | 20 | 50 |
-| particlePool | Shard/Dot Sprite | 50 | 200 |
-| floatingTextPool | PixiJS Text | 10 | 20 |
-| gridFlowPool | Flow Sprite | 20 | 20 |
-
----
-
-## 物理引擎整合
-
-### Matter.js 關鍵參數
-
-#### 引擎全域參數（`PHYSICS_CONFIG`）
+### 引擎全域參數
 
 | 參數 | 值 | 影響 |
 |------|-----|------|
-| gravity.y | **2.2** | 較強垂直重力——快速沈降、節奏感 |
-| positionIterations | 12 | 位置修正精確度（高） |
-| velocityIterations | 10 | 速度修正精確度 |
-| constraintIterations | 4 | 約束修正次數 |
-| runnerDelta | 1000/120 | 120Hz 物理更新 |
+| gravity.y | [值] | [對遊戲手感的影響] |
+| ...iterations | [值] | [精確度/效能平衡] |
 
-#### 形狀 Body 參數（`SHAPE_BODY_CONFIG`）
+### 形狀 Body 參數
 
 | 參數 | 值 | 影響 |
 |------|-----|------|
-| restitution | **0.15** | 低彈性——穩定堆疊 |
-| friction | **0.6** | 高摩擦——不容易滑動 |
-| frictionStatic | **0.8** | 靜摩擦——堆疊穩定 |
-| baseDensity | **0.0015** | 基礎密度（小形狀輕） |
-| densityPerLevel | **0.0004** | 每升一級密度增加（大形狀沉重） |
-| slop | **0.005** | 碰撞容差——避免靜止態抖動 |
-
-#### 牆壁 Body 參數（`WALL_BODY_CONFIG`）
-
-| 參數 | 值 |
-|------|-----|
-| isStatic | true |
-| friction | 1.0 |
-| restitution | 0.1 |
-| frictionStatic | 1.0 |
-
-> ⚠️ **規範**：所有數值必須與 `src/data/config.ts` 中的常數完全一致。
-
-### 碰撞事件處理
-
+| restitution | [值] | [描述碰撞彈性的感覺] |
+| friction | [值] | [描述滑動/堆疊的感覺] |
 ```
-Events.on(engine, 'collisionStart', callback)
-  → 檢查兩個 body 的 level 是否相同
-  → 相同且都非 wall → 觸發合成
-  → 合成時立即移除兩個 body（deferred destroy pattern）
+
+### 碰撞體設計
+
+記錄碰撞體的**設計決策**及**原因**：
+
+```markdown
+- 碰撞體形狀：[圓形/多邊形]
+- 碰撞半徑：[公式]
+- 設計理由：[為什麼這樣選]（例：簡化計算、避免卡角）
 ```
 
 ---
 
-## 行動裝置相容性
+## Object Pool 撰寫指南
 
-| 問題 | 解法 |
-|------|------|
-| WebGPU 不支援 | 自動 fallback 到 WebGL |
-| Canvas 過大 | `devicePixelRatio` 限制最大 2x |
-| 觸控延遲 | `touchstart` 替代 `click` |
-| iOS Safari 黑屏 | Canvas resolution 限制 4096² |
-| 記憶體壓力 | Texture 快取控制 + Pool 上限 |
+### Pool 定義模板
+
+```markdown
+| Pool 名稱 | 物件類型 | 用途 | prewarm 數量 |
+|-----------|---------|------|-------------|
+| [名稱] | [PixiJS Sprite 等] | [哪裡用到] | [預熱幾個] |
+
+**Pool 行為**：
+- acquire()：[取出行為]
+- release()：[回收行為 — reset 哪些屬性]
+- drain()：[清除全部 — 何時觸發]
+```
+
+---
+
+## 行動裝置相容性 Checklist
+
+| 項目 | 驗證方式 |
+|------|---------|
+| Canvas 解析度不超過硬體限制 | 檢查 `maxTextureSize` |
+| WebGPU → WebGL 降級正常 | 在不支援 WebGPU 的裝置測試 |
+| Touch 事件不觸發瀏覽器手勢 | passive: false 設定 |
+| 記憶體 30 分鐘不連續增長 | DevTools Memory 監控 |
 
 ---
 
 ## 工作流程
 
-1. **效能預算** — 定義各平台的粒子/Texture/GPU 上限
-2. **Texture 快取** — 設計快取 key 與生命週期
-3. **Object Pool** — 規劃各類 Pool 的預熱與上限
-4. **粒子規格** — 每種特效的數量/生命/Blend Mode
-5. **物理參數** — gravity/restitution/friction 調校
-6. **跨平台測試** — 最低硬體基準測試
+1. **渲染初始化** — 定義 PixiJS 設定、渲染後端選擇
+2. **Texture 快取** — 定義所有 Texture 的生成方式和快取策略
+3. **粒子系統** — 定義粒子類型、生命週期、效能預算
+4. **物理整合** — 完整物理參數表（附影響說明）
+5. **Object Pool** — 定義池的用途和行為
+6. **行動裝置** — 跨平台相容性驗證清單
